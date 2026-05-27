@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+coverage/
+
+# Engram vault derived artifacts (rebuildable from .md sources)
+.engram/index.json
+.engram/vectors.json
+.engram/runs/
+
+# Panel build
+packages/panel/dist/
+
+# Local env
+.env
+.env.local

@@ -1,0 +1,32 @@
+{
+  "name": "engram-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first, markdown-native memory for AI agents — tiered memory, Ebbinghaus decay, consolidation.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Blake Stone",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "packages/mcp",
+    "packages/panel"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @engram/core && npm run build --workspace engram && npm run build --workspace @engram/mcp && npm run build --workspace @engram/panel",
+    "build:lib": "npm run build --workspace @engram/core && npm run build --workspace engram && npm run build --workspace @engram/mcp",
+    "test": "npm run test --workspace @engram/core",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "tsc -b packages/core packages/cli",
+    "clean": "rimraf packages/*/dist packages/*/tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
