@@ -1,29 +1,42 @@
 {
   "name": "engram",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Engram CLI — local-first, markdown-native memory for AI agents. Tiered memory, Ebbinghaus decay, consolidation.",
   "type": "module",
   "license": "MIT",
   "author": "Blake Stone",
-  "keywords": ["ai", "agent", "memory", "markdown", "llm", "knowledge-base", "spaced-repetition", "rag"],
+  "keywords": [
+    "ai",
+    "agent",
+    "memory",
+    "markdown",
+    "llm",
+    "knowledge-base",
+    "spaced-repetition",
+    "rag"
+  ],
   "bin": {
     "engram": "./dist/index.js"
   },
-  "files": ["dist"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -b",
     "lint": "tsc -b --noEmit || true",
     "start": "node ./dist/index.js"
   },
   "dependencies": {
-    "@engram/core": "0.1.0",
+    "@engram/core": "0.2.0",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1"
   },
   "optionalDependencies": {
-    "@engram/panel": "0.1.0"
+    "@engram/panel": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

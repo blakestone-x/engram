@@ -1,11 +1,13 @@
 {
   "name": "@engram/panel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Engram control panel — local web UI for the Engram memory engine.",
   "type": "module",
   "license": "MIT",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "vite build",
     "dev": "vite",

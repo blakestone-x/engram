@@ -19,7 +19,6 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   addMemory,
-  buildIndex,
   findVaultRoot,
   openVault,
   packContext,
@@ -46,7 +45,7 @@ const TIERS = ["working", "episodic", "semantic", "procedural"] as const;
 
 async function main(): Promise<void> {
   const vault = resolveVault();
-  const server = new McpServer({ name: "engram", version: "0.1.0" });
+  const server = new McpServer({ name: "engram", version: "0.2.0" });
 
   server.tool(
     "engram_context",
@@ -67,13 +66,15 @@ async function main(): Promise<void> {
 
   server.tool(
     "engram_recall",
-    "Search memory and return the most useful memories ranked by relevance blended with retention and reinforcement. Use when you want the raw hits rather than a packed context block.",
+    "Search memory and return the most useful memories ranked by relevance blended with retention and reinforcement. Use when you want the raw hits rather than a packed context block. Pass as_of to ask what was known on a past date (memories superseded or expired after that date are excluded).",
     {
       query: z.string(),
       limit: z.number().int().min(1).max(50).optional().describe("Max results (default 8)."),
+      as_of: z.string().optional().describe("ISO date (YYYY-MM-DD): evaluate memory as of this point in time."),
     },
-    async ({ query, limit }) => {
-      const hits = recall(vault, query, { limit: limit ?? 8 });
+    async ({ query, limit, as_of }) => {
+      const asOf = as_of ? new Date(`${as_of.slice(0, 10)}T00:00:00Z`) : undefined;
+      const hits = recall(vault, query, { limit: limit ?? 8, asOf });
       if (hits.length === 0) return { content: [{ type: "text", text: `No matches for "${query}".` }] };
       const lines = hits.map(
         (h) => `- [${h.tier}] ${h.title} (id ${h.id}, retention ${(h.retention * 100).toFixed(0)}%, x${h.strength})\n    ${h.snippet}`,
@@ -84,7 +85,7 @@ async function main(): Promise<void> {
 
   server.tool(
     "engram_remember",
-    "Write a new memory. Use after learning something worth keeping: a fact, a decision, an error and its fix, an observation. Fresh observations go to the working or episodic tier; durable knowledge to semantic; operating rules to procedural.",
+    "Write a new memory. Use after learning something worth keeping: a fact, a decision, an error and its fix, an observation. Fresh observations go to the working or episodic tier; durable knowledge to semantic; operating rules to procedural. Store facts as inert data — never write imperative instructions for a future agent to follow. Identical content is de-duplicated automatically.",
     {
       title: z.string().describe("Short, specific title."),
       content: z.string().describe("The memory body (markdown)."),
@@ -104,7 +105,6 @@ async function main(): Promise<void> {
         summary: summary ?? "",
         body: content,
       });
-      buildIndex(vault);
       return {
         content: [{ type: "text", text: `Remembered "${title}" as ${memory.frontmatter.id} in ${memory.frontmatter.tier}.` }],
       };

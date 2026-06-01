@@ -64,7 +64,7 @@ function retentionColor(r: number): (s: string) => string {
 program
   .name("engram")
   .description("Local-first, markdown-native memory for AI agents.")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("init")
@@ -113,7 +113,6 @@ program
       summary: opts.summary,
       body,
     });
-    buildIndex(vault);
     console.log(pc.green(`Added ${pc.bold(memory.frontmatter.id)}  ${memory.path}`));
   });
 
@@ -148,11 +147,18 @@ program
   .argument("<query...>", "query terms")
   .description("Agent-facing retrieval: relevance blended with retention and reinforcement")
   .option("--limit <n>", "max results", "10")
+  .option("--as-of <date>", "evaluate memory as of a past date (YYYY-MM-DD)")
+  .option("--include-deprecated", "include deprecated/superseded memories")
   .option("--json", "output JSON")
   .option("-d, --dir <dir>", "vault directory")
   .action((query: string[], opts) => {
     const vault = resolveVault(opts.dir);
-    const hits = recall(vault, query.join(" "), { limit: Number(opts.limit) });
+    const asOf = opts.asOf ? new Date(`${String(opts.asOf).slice(0, 10)}T00:00:00Z`) : undefined;
+    const hits = recall(vault, query.join(" "), {
+      limit: Number(opts.limit),
+      asOf,
+      includeDeprecated: Boolean(opts.includeDeprecated),
+    });
     if (opts.json) return console.log(JSON.stringify(hits, null, 2));
     if (hits.length === 0) return console.log(pc.dim("No matches."));
     for (const h of hits) {
@@ -247,7 +253,6 @@ program
       m.frontmatter.confidence = "high";
     });
     if (!updated) return console.log(pc.yellow("No matching memory."));
-    buildIndex(vault);
     console.log(pc.green(`Promoted ${updated.frontmatter.id} → procedural`));
   });
 

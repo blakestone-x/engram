@@ -1,6 +1,6 @@
 {
   "name": "@engram/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Engram engine: markdown vault IO, BM25 search, Ebbinghaus decay, memory consolidation, and a local HTTP API.",
   "type": "module",
   "license": "MIT",
@@ -13,8 +13,12 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
-  "engines": { "node": ">=20" },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc -b",
     "test": "vitest run",
