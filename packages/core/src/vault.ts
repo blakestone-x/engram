@@ -1,30 +1,29 @@
 /** Vault filesystem layer: open/init a vault and read/write memories. */
 
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
 import { ENGRAM_DIR, DEFAULT_CONFIG, loadConfig, saveConfig } from "./config.js";
 import { today } from "./dates.js";
-import {
-  frontmatterFromInput,
-  parseFrontmatter,
-  serialize,
-} from "./frontmatter.js";
+import { frontmatterFromInput, serialize } from "./frontmatter.js";
 import { scrub } from "./privacy.js";
+import { putMemory, storeGet, storeMemories } from "./store.js";
 import type { EngramConfig, Memory, MemoryInput, RunEvent, Tier, Vault } from "./types.js";
 import { TIERS } from "./types.js";
 
 const RUNS_DIR = "runs";
 const RUNS_FILE = "runs.jsonl";
 
-function toPosix(p: string): string {
-  return p.split(sep).join("/");
+/** Stable content hash of a memory's title + body, for dedup. */
+function contentHash(title: string, body: string): string {
+  return createHash("sha256").update(`${title.trim()}\n\n${body.trim()}`).digest("hex");
+}
+
+/** Write a file atomically: write a sibling temp file, then rename over the target. */
+function writeFileAtomic(absPath: string, content: string): void {
+  const tmp = `${absPath}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, content, "utf8");
+  renameSync(tmp, absPath);
 }
 
 export function slugify(value: string): string {
@@ -72,70 +71,60 @@ export function initVault(root: string): Vault {
   return { root: abs, config };
 }
 
-function walkMarkdown(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkMarkdown(full));
-    else if (entry.name.endsWith(".md")) out.push(full);
-  }
-  return out;
-}
-
-function readMemoryFile(vault: Vault, absPath: string): Memory {
-  const raw = readFileSync(absPath, "utf8");
-  const fallbackTitle = basename(absPath, ".md");
-  const { frontmatter, body } = parseFrontmatter(raw, fallbackTitle);
-  return {
-    frontmatter,
-    body,
-    absPath,
-    path: toPosix(relative(vault.root, absPath)),
-  };
-}
-
-/** Load every memory across all tier directories. */
+/** Load every memory across all tier directories (cached; see store.ts). */
 export function listMemories(vault: Vault): Memory[] {
-  const out: Memory[] = [];
-  for (const tier of TIERS) {
-    for (const file of walkMarkdown(join(vault.root, tier))) {
-      out.push(readMemoryFile(vault, file));
-    }
-  }
-  return out;
+  return storeMemories(vault.root).slice();
 }
 
-/** Look up a memory by id (preferred) or vault-relative path. */
+/** Look up a memory by id (preferred) or vault-relative path. O(1) via the store. */
 export function getMemory(vault: Vault, idOrPath: string): Memory | null {
-  const all = listMemories(vault);
-  const byId = all.find((m) => m.frontmatter.id === idOrPath);
-  if (byId) return byId;
-  const normalized = toPosix(idOrPath);
-  return all.find((m) => m.path === normalized) ?? null;
+  return storeGet(vault.root, idOrPath);
 }
 
-/** Persist a memory to its `path`, creating parent dirs as needed. */
+/** Persist a memory to its `path` atomically, then update the cache. */
 export function writeMemory(vault: Vault, memory: Memory): void {
   const abs = memory.absPath || join(vault.root, memory.path);
   mkdirSync(dirname(abs), { recursive: true });
-  writeFileSync(abs, serialize(memory), "utf8");
+  writeFileAtomic(abs, serialize(memory));
+  putMemory(vault.root, memory);
 }
 
-/** Create a new memory from input, scrubbing secrets and choosing a path. */
+/**
+ * Create a new memory, scrubbing secrets and choosing a path.
+ *
+ * Two safety nets borrowed from how mature memory systems avoid bloat:
+ * - **Dedup:** if an active memory already has identical title+body, the existing
+ *   one is reinforced and returned instead of writing a duplicate (unless the
+ *   caller passes `allowDuplicate`).
+ * - **Supersession:** for any `supersedes` link in the input, the target memory is
+ *   marked `deprecated` and stamped with `superseded_by`, so a corrected fact
+ *   retires the old one without deleting it (non-lossy).
+ */
 export function addMemory(vault: Vault, input: MemoryInput): Memory {
+  const body = scrub(input.body ?? "", vault.config).text;
+
+  if (!input.allowDuplicate) {
+    const hash = contentHash(input.title, body);
+    const dup = storeMemories(vault.root).find(
+      (m) => m.frontmatter.status === "active" && contentHash(m.frontmatter.title, m.body) === hash,
+    );
+    if (dup) return reinforce(vault, [dup.frontmatter.id], "dedup")[0] ?? dup;
+  }
+
   const frontmatter = frontmatterFromInput(input);
-  const scrubbed = scrub(input.body ?? "", vault.config);
   const fileName = `${today()}-${slugify(frontmatter.title)}-${frontmatter.id}.md`;
   const rel = `${frontmatter.tier}/${fileName}`;
-  const memory: Memory = {
-    frontmatter,
-    body: scrubbed.text,
-    path: rel,
-    absPath: join(vault.root, rel),
-  };
+  const memory: Memory = { frontmatter, body, path: rel, absPath: join(vault.root, rel) };
   writeMemory(vault, memory);
+
+  for (const link of frontmatter.links) {
+    if (link.rel !== "supersedes") continue;
+    updateMemory(vault, link.to, (target) => {
+      target.frontmatter.status = "deprecated";
+      target.frontmatter.superseded_by = frontmatter.id;
+      target.frontmatter.last_reviewed = today();
+    });
+  }
   return memory;
 }
 

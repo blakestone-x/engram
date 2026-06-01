@@ -18,9 +18,9 @@ import { TIERS } from "./types.js";
 const STATUSES: MemoryStatus[] = ["active", "consolidated", "deprecated", "disputed"];
 const CONFIDENCES: Confidence[] = ["high", "medium", "low"];
 
-/** Stable 8-char hex id. */
+/** Stable 12-char hex id (48 bits; collision-safe well past 10^6 memories). */
 export function generateId(): string {
-  return randomBytes(4).toString("hex");
+  return randomBytes(6).toString("hex");
 }
 
 function asTier(value: unknown, fallback: Tier = "working"): Tier {
@@ -87,7 +87,7 @@ function asLinks(value: unknown): MemoryLink[] {
  */
 export function coerceFrontmatter(data: Record<string, unknown>, fallbackTitle: string): Frontmatter {
   const created = asDateString(data.created, today());
-  return {
+  const fm: Frontmatter = {
     id: asId(data.id) ?? generateId(),
     title: typeof data.title === "string" && data.title ? data.title : fallbackTitle,
     tier: asTier(data.tier),
@@ -103,12 +103,18 @@ export function coerceFrontmatter(data: Record<string, unknown>, fallbackTitle: 
     links: asLinks(data.links),
     summary: typeof data.summary === "string" ? data.summary : "",
   };
+  if (data.valid_until instanceof Date || (typeof data.valid_until === "string" && data.valid_until.trim())) {
+    fm.valid_until = asDateString(data.valid_until, "");
+  }
+  const superseded = asId(data.superseded_by);
+  if (superseded) fm.superseded_by = superseded;
+  return fm;
 }
 
 /** Build a complete Frontmatter from user input, generating id/dates. */
 export function frontmatterFromInput(input: MemoryInput): Frontmatter {
   const now = today();
-  return {
+  const fm: Frontmatter = {
     id: input.id ?? generateId(),
     title: input.title,
     tier: input.tier,
@@ -124,6 +130,8 @@ export function frontmatterFromInput(input: MemoryInput): Frontmatter {
     links: input.links ?? [],
     summary: input.summary ?? "",
   };
+  if (input.valid_until) fm.valid_until = input.valid_until.slice(0, 10);
+  return fm;
 }
 
 /** Parse a raw `.md` string into frontmatter + body. */
@@ -144,6 +152,9 @@ const KEY_ORDER: (keyof Frontmatter)[] = [
 export function serializeMemory(frontmatter: Frontmatter, body: string): string {
   const ordered: Record<string, unknown> = {};
   for (const key of KEY_ORDER) ordered[key] = frontmatter[key];
+  // Optional bi-temporal fields are emitted only when set, to keep files clean.
+  if (frontmatter.valid_until) ordered.valid_until = frontmatter.valid_until;
+  if (frontmatter.superseded_by) ordered.superseded_by = frontmatter.superseded_by;
   const yaml = YAML.stringify(ordered, { lineWidth: 0 }).trimEnd();
   const cleanBody = body.replace(/^\n+/, "").trimEnd();
   return `---\n${yaml}\n---\n\n${cleanBody}\n`;

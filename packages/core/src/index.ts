@@ -43,7 +43,9 @@ export {
   retentionFor,
   stabilityFor,
   importanceFactor,
+  tierFactor,
   isPinned,
+  isExpired,
   daysUntilDeprecate,
   decayReport,
   runDecay,
@@ -53,17 +55,14 @@ export {
 export { runConsolidation } from "./consolidate.js";
 
 // Search & recall
-export { buildIndex, ensureIndex, search } from "./search.js";
+export { buildIndex, ensureIndex, search, invalidateIndex } from "./search.js";
 export { recall, type RecallHit, type RecallOptions } from "./recall.js";
 
 // Context packing (token-budgeted retrieval for prompt injection)
-export {
-  packContext,
-  estimateTokens,
-  type ContextPack,
-  type ContextEntry,
-  type PackOptions,
-} from "./context.js";
+export { packContext, estimateTokens } from "./context.js";
+
+// Store cache control (mainly for tests / long-running hosts)
+export { invalidateStore, refreshStore } from "./store.js";
 
 // Optional semantic layer
 export { getProvider, buildVectors, semanticSearch, fuse, OpenAIEmbeddingProvider } from "./embeddings.js";

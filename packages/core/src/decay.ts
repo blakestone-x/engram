@@ -24,6 +24,7 @@ import type {
   Frontmatter,
   Memory,
   RetentionResult,
+  Tier,
   Vault,
 } from "./types.js";
 
@@ -32,12 +33,19 @@ export function importanceFactor(importance: number, config: DecayConfig): numbe
   return Math.max(0.25, 1 + config.importanceWeight * (importance - 5));
 }
 
+/** Per-tier stability multiplier (0/missing → 1). Working fades, procedural endures. */
+export function tierFactor(tier: Tier, config: DecayConfig): number {
+  const mult = config.tierStability?.[tier];
+  return mult && mult > 0 ? mult : 1;
+}
+
 /** Stability S in days: how slowly this memory decays. */
-export function stabilityFor(fm: Pick<Frontmatter, "strength" | "importance">, config: DecayConfig): number {
+export function stabilityFor(fm: Pick<Frontmatter, "strength" | "importance" | "tier">, config: DecayConfig): number {
   return (
     config.baseStability *
     (1 + config.strengthWeight * fm.strength) *
-    importanceFactor(fm.importance, config)
+    importanceFactor(fm.importance, config) *
+    tierFactor(fm.tier, config)
   );
 }
 
@@ -56,6 +64,12 @@ export function retentionFor(fm: Frontmatter, config: DecayConfig, now: Date = n
 /** A memory is pinned (decay-exempt) if highly important or not active. */
 export function isPinned(fm: Frontmatter, config: DecayConfig): boolean {
   return fm.importance >= config.pinThreshold || fm.status !== "active";
+}
+
+/** True if the memory's bi-temporal validity has lapsed as of `now`. */
+export function isExpired(fm: Frontmatter, now: Date = new Date()): boolean {
+  if (!fm.valid_until) return false;
+  return fm.valid_until.slice(0, 10) < today(now);
 }
 
 /**

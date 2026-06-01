@@ -45,7 +45,11 @@ function eligible(vault: Vault, now: Date): Candidate[] {
     })
     .map((memory) => ({
       memory,
-      tokens: tokenSet(`${memory.frontmatter.title} ${memory.frontmatter.summary} ${memory.body}`),
+      tokens: tokenSet(
+        `${memory.frontmatter.title} ${memory.frontmatter.summary} ${memory.body}`,
+        80,
+        vault.config.search.stemming,
+      ),
     }));
 }
 
