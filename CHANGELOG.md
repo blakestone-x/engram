@@ -4,6 +4,51 @@ All notable changes to Engram are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-01
+
+A performance and retrieval-quality release, informed by a survey of the agent-memory
+field (Mem0, Letta, Zep/Graphiti, Cognee, LangMem, the official MCP memory server). See
+[docs/PRIOR-ART.md](docs/PRIOR-ART.md) for the rationale and citations.
+
+### Added
+
+- **MCP server** (`@engram/mcp`). Exposes a vault to any MCP client (Claude Desktop,
+  Claude Code, Cursor) as five tools — `engram_context`, `engram_recall`,
+  `engram_remember`, `engram_reinforce`, `engram_stats`. `engram_recall` takes an
+  `as_of` date for point-in-time queries.
+- **`engram context`** and `packContext()` — token-budgeted, structured, recency-ordered
+  retrieval for prompt injection: a capped block with tier, confidence, retention, id, and
+  validity per entry, with near-duplicate suppression.
+- **Tier-aware decay.** A per-tier stability ladder (`decay.tierStability`, default
+  working 0.4 / episodic 1 / semantic 2.5 / procedural 8): `working` scratch fades in
+  days, `procedural` rules are effectively permanent.
+- **Lightweight bi-temporal memory.** Optional `valid_until` and `superseded_by`
+  frontmatter; a `supersedes` link retires the target (marks it `deprecated`, stamps
+  `superseded_by`) without deleting it. Expired and superseded memories drop out of recall
+  unless explicitly requested.
+- **Content-hash dedup on write.** Identical title+body reinforces the existing memory
+  instead of writing a duplicate (`allowDuplicate` opts out).
+- **Porter stemming** (`search.stemming`, default on) so word variants match.
+- **Atomic writes** for memory files and the index (temp file + rename).
+
+### Changed
+
+- **Performance.** A cached in-process vault store (`Map`-indexed) and an in-process index
+  cache replace the per-call full re-read. On a 2,000-memory vault: `getMemory` 402 ms →
+  ~0 ms, `recall` 417 ms → ~9 ms, `reinforce ×3` 1,477 ms → ~0.2 ms.
+- **Self-healing incremental index.** `ensureIndex` reconciles only changed/added/removed
+  documents via per-file mtimes; writes no longer trigger a full rebuild.
+- **BM25F retrieval.** Title, summary, and body are weighted fields with their own length
+  normalization and a combined document frequency, replacing v0.1's title-repetition
+  field boost. Weights live in `search.fieldWeights` (default title 5 / summary 2 / body 1).
+- **Search excludes deprecated/superseded memories by default** (`includeDeprecated` to keep them).
+- **12-character ids** (48 bits) for new memories; existing ids load unchanged.
+
+### Notes
+
+- Still single-user, local, offline by default, zero native dependencies.
+- The index file format is v2; an existing v1 index is rebuilt automatically on first use.
+
 ## [0.1.0] - 2026-05-31
 
 Initial public release. Engram is a local-first, markdown-native memory engine
@@ -59,4 +104,5 @@ for AI agents — single-user, offline by default, no telemetry.
 - `@engram/core` has zero native dependencies and runs on a clean machine with
   only Node ≥ 20.
 
+[0.2.0]: https://github.com/blakestone-x/engram/releases/tag/v0.2.0
 [0.1.0]: https://github.com/blakestone-x/engram/releases/tag/v0.1.0

@@ -5,10 +5,11 @@ dist/
 *.log
 coverage/
 
-# Engram vault derived artifacts (rebuildable from .md sources)
-.engram/index.json
-.engram/vectors.json
-.engram/runs/
+# Engram vault derived artifacts (rebuildable from .md sources), at any depth
+**/.engram/index.json
+**/.engram/vectors.json
+**/.engram/runs/
+*.engram-*.tmp
 
 # Panel build
 packages/panel/dist/

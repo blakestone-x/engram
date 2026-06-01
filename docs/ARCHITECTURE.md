@@ -20,12 +20,14 @@ One line each, in roughly dependency order. The barrel is `src/index.ts`.
 | `config.ts` | `EngramConfig` defaults (`DEFAULT_CONFIG`), zod validation, and load/save of `.engram/config.json` with partial-config merge over defaults. |
 | `frontmatter.ts` | Parse and serialize memory frontmatter with a fixed canonical key order; tolerant coercion that fills defaults for missing or hand-edited fields; id generation. |
 | `privacy.ts` | The redaction scrub — replaces matches of the vault's `redactPatterns` with `[REDACTED]` before a body is written. Invalid patterns are skipped, never thrown. |
-| `vault.ts` | The filesystem layer: init/open a vault, walk the tier directories, read/write memories, `addMemory`, `updateMemory`, `reinforce`, and the jsonl run log. |
+| `vault.ts` | The filesystem layer over the store: init/open a vault, read/write memories (atomic writes), `addMemory` (content-hash dedup + supersession), `updateMemory`, `reinforce`, and the jsonl run log. |
+| `store.ts` | The cached vault store: loads memories once per process into `Map<id>`/`Map<path>`, serves O(1) lookups, keeps the cache coherent on write, and `refreshStore` re-scans for external edits. |
 | `dates.ts` | ISO `YYYY-MM-DD` helpers and `elapsedDays` — the day arithmetic the decay clock reads. |
-| `tokens.ts` | The single tokenizer shared by search and consolidation, plus Jaccard similarity. One notion of "a word" for both "matches the query" and "similar enough to cluster." |
-| `decay.ts` | The forgetting curve: `retentionFor`, `stabilityFor`, `importanceFactor`, `isPinned`, `daysUntilDeprecate`, `decayReport`, and the `runDecay` pass. Pure given a clock. |
+| `tokens.ts` | The single tokenizer shared by search and consolidation, plus Jaccard similarity and optional Porter stemming. One notion of "a word" for both "matches the query" and "similar enough to cluster." |
+| `stemmer.ts` | A vendored Porter stemmer applied identically to indexed text and queries when `search.stemming` is on. |
+| `decay.ts` | The forgetting curve: `retentionFor`, `stabilityFor` (tier- and reinforcement-scaled), `importanceFactor`, `tierFactor`, `isPinned`, `isExpired`, `daysUntilDeprecate`, `decayReport`, and the `runDecay` pass. Pure given a clock. |
 | `consolidate.ts` | The consolidation pass: gather eligible episodic memories, cluster by Jaccard, synthesize one semantic memory per kept cluster, mark sources `consolidated`. |
-| `search.ts` | The pure-TypeScript inverted index and BM25 ranking, persisted to `.engram/index.json`; `buildIndex`, `ensureIndex`, `search` with tier/type/status filters and snippet generation. |
+| `search.ts` | The pure-TypeScript inverted index and **BM25F** field-weighted ranking, persisted to `.engram/index.json` and cached in process; `buildIndex`, `ensureIndex` (self-healing incremental reconcile by mtime), `search` with filters, default deprecated exclusion, and snippet generation. |
 | `recall.ts` | The agent-facing retrieval entry: BM25 blended with retention and reinforcement so recall returns the most useful memories rather than the most lexically similar. |
 | `context.ts` | `packContext` — token-budgeted retrieval that formats a compact markdown block of the top memories for prompt injection; `estimateTokens`. |
 | `embeddings.ts` | The optional semantic layer: an `EmbeddingProvider` interface, an OpenAI provider gated on `OPENAI_API_KEY`, vector build, cosine, and Reciprocal Rank Fusion of lexical and semantic ranks. No-op without a configured provider. |

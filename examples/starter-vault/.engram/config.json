@@ -5,7 +5,8 @@
     "strengthWeight": 0.8,
     "importanceWeight": 0.15,
     "deprecateThreshold": 0.15,
-    "pinThreshold": 8
+    "pinThreshold": 8,
+    "tierStability": { "working": 0.4, "episodic": 1, "semantic": 2.5, "procedural": 8 }
   },
   "consolidation": {
     "minStrength": 2,
@@ -14,7 +15,12 @@
     "minClusterSize": 3,
     "maxPerRun": 3
   },
-  "search": { "k1": 1.5, "b": 0.75 },
+  "search": {
+    "k1": 1.5,
+    "b": 0.75,
+    "fieldWeights": { "title": 5, "summary": 2, "body": 1 },
+    "stemming": true
+  },
   "embeddings": { "provider": null },
   "redactPatterns": [
     "AKIA[0-9A-Z]{16}",

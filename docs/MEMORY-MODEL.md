@@ -25,7 +25,7 @@ For a memory `m` evaluated at time `now`:
 
 ```
 t         = days since m.last_reinforced (or m.created if never reinforced)
-S         = baseStability · (1 + strengthWeight · strength) · importanceFactor(importance)
+S         = baseStability · (1 + strengthWeight · strength) · importanceFactor(importance) · tierFactor(tier)
 retention = exp(-t / S)
 ```
 
@@ -46,6 +46,17 @@ importanceFactor(i) = max(0.25, 1 + importanceWeight · (i − 5))
 ```
 
 with `importanceWeight` default **0.15**. Importance 5 is neutral (factor 1.0). Higher importance lengthens stability; lower importance shortens it. The `max(0.25, …)` floor stops a very low-importance memory from getting a near-zero or negative stability.
+
+### Tier factor
+
+The tiers are a half-life ladder. `tierFactor(tier)` reads `decay.tierStability` (default **working 0.4 · episodic 1 · semantic 2.5 · procedural 8**; a value of 0 or a missing tier means 1). This is what makes the tiers physical rather than organizational:
+
+- A neutral **working** memory has `S = 14 · 0.4 = 5.6` days — it is nearly gone (retention ≈ 0.005) after a month untouched. Scratch should evaporate.
+- A neutral **episodic** memory uses base stability (factor 1).
+- A neutral **semantic** memory has `S = 35` days, so durable knowledge fades slowly.
+- A neutral **procedural** memory has `S = 112` days and, combined with the high importance such rules usually carry, is effectively permanent.
+
+Promoting a memory up a tier (`engram promote`, or consolidation episodic → semantic) therefore lengthens its half-life as well as changing what it means.
 
 Worked factors at the default weight:
 
@@ -120,7 +131,15 @@ An importance-8 memory has `importanceFactor(8) = 1.45` and `S = 20.3` days, so 
 finalScore = bm25 · (0.6 + 0.4 · retention) · (1 + 0.1 · strength)
 ```
 
-A perfectly retained memory gets the full `bm25` weight; a fully decayed one keeps 60% of it. Reinforcement adds 10% per point of strength. The effect is that a durable, frequently-used memory will outrank a fading one even when the fading one shares a few more query words. (Deprecated memories are dropped from recall by default.)
+A perfectly retained memory gets the full `bm25` weight; a fully decayed one keeps 60% of it. Reinforcement adds 10% per point of strength. The effect is that a durable, frequently-used memory will outrank a fading one even when the fading one shares a few more query words. (Deprecated, superseded, and expired memories are dropped from recall by default.)
+
+## Supersession and validity
+
+Decay handles "this got old." A separate mechanism handles "this got *replaced*." When a fact changes, you write the new memory with a `supersedes` link to the old one; Engram marks the old memory `deprecated` and stamps its `superseded_by` with the new id. Nothing is deleted — the old memory stays on disk, out of normal retrieval but recoverable.
+
+A memory may also carry an optional `valid_until` date. Past that date it is *expired*: still on disk, still part of the record, but excluded from recall the same way a superseded one is.
+
+Both together give a lightweight bi-temporal model: you can ask `recall --as-of <date>` (or pass `asOf` in the library / `as_of` in the MCP tool) to retrieve what was known and still valid at a past point in time, with memories superseded or expired after that date excluded. It is the queryable-history idea from temporal knowledge graphs, expressed as two optional frontmatter fields rather than a graph database.
 
 ## Consolidation: episodic to semantic
 

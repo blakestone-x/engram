@@ -210,13 +210,19 @@ retention = exp(-t / S)
 S = baseStability · (1 + strengthWeight · strength) · importanceFactor
 ```
 
-where `t` is days since the memory was last reinforced (or created) and `importanceFactor(i) = 1 + importanceWeight · (i − 5)`, floored at `0.25`. With the defaults (`baseStability` 14 days, `strengthWeight` 0.8, `importanceWeight` 0.15), a neutral memory loses about 63% of its retention in two weeks if you never touch it. See [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) for the full derivation.
+where `t` is days since the memory was last reinforced (or created) and `importanceFactor(i) = 1 + importanceWeight · (i − 5)`, floored at `0.25`. Stability is also scaled per tier (`tierStability`, default working 0.4 / episodic 1 / semantic 2.5 / procedural 8), so `working` scratch fades in days while `procedural` rules are effectively permanent. With the defaults (`baseStability` 14 days, `strengthWeight` 0.8, `importanceWeight` 0.15), a neutral episodic memory loses about 63% of its retention in two weeks if you never touch it. See [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) for the full derivation.
 
 **Reinforcement is spaced repetition.** Each recall you confirm useful can be reinforced; that resets the clock to today and increments `strength`, which raises future stability. Memories you keep using become progressively harder to forget. Memories you ignore fall below the deprecate threshold and get marked `deprecated`.
 
 **Consolidation, episodic to semantic.** The offline pass gathers aged, reinforced episodic memories, clusters them by token overlap, and synthesizes one durable semantic memory per cluster — with `informed_by` links back to every source. The sources are kept and marked `consolidated`, so the trail remains. Promotion past semantic (to a procedural operating rule) is human-invoked only, via `engram promote`.
 
-**BM25 search, optional embeddings.** Retrieval is a pure-TypeScript inverted index with BM25 ranking (`k1=1.5`, `b=0.75`) — fully offline, no service to run. If you configure an embedding provider, `buildVectors` populates a vector index and search fuses lexical and semantic ranks with Reciprocal Rank Fusion. With no provider configured, nothing leaves the machine.
+**Supersession instead of deletion.** When a fact changes, a new memory with a `supersedes` link retires the old one — marking it `deprecated` and stamping `superseded_by`, never deleting it. Superseded and expired (`valid_until`) memories drop out of recall, but the history stays on disk and is queryable with `recall --as-of <date>`. This is the lightweight, markdown-native version of a bi-temporal knowledge graph.
+
+**BM25F search, optional embeddings.** Retrieval is a pure-TypeScript inverted index with **BM25F** field weighting — title, summary, and body each get their own length normalization and a combined document frequency (default weights title 5 / summary 2 / body 1), with optional Porter stemming so word variants match. Fully offline, no service to run. If you configure an embedding provider, `buildVectors` populates a vector index and search fuses lexical and semantic ranks with Reciprocal Rank Fusion. With no provider configured, nothing leaves the machine.
+
+**Dedup on write.** Identical title+body reinforces the existing memory instead of writing a duplicate, so append-heavy agents don't bloat the store.
+
+**Fast at scale.** A cached in-process store and a self-healing incremental index keep steady-state operations in the single-digit milliseconds even on a multi-thousand-memory vault (`getMemory` and `reinforce` are effectively O(1); a write reconciles one document, not the whole index).
 
 **Control panel.** A black/grey/red web UI over the engine's local HTTP API: overview with a live decay chart, a filterable memory table, a force-directed link graph, and an operations view that previews a decay or consolidation run before you apply it.
 
@@ -270,7 +276,7 @@ Engram is a CLI and a library, so it slots into whatever orchestration you alrea
 
 Four packages in an npm workspace:
 
-- **`@engram/core`** — the engine. Vault IO, frontmatter, BM25 index, decay, consolidation, recall, context packing, the optional embedding layer, and a `node:http` API. No native dependencies.
+- **`@engram/core`** — the engine. A cached vault store, frontmatter, the BM25F index, decay, consolidation, recall, context packing, the optional embedding layer, and a `node:http` API. No native dependencies.
 - **`engram`** — the CLI. A thin, scriptable surface over core; plain-text output by default, `--json` where it helps.
 - **`@engram/mcp`** — the Model Context Protocol server. Exposes the vault as five memory tools to any MCP client.
 - **`@engram/panel`** — the Vite + React control panel, built to a static bundle that core can serve.
@@ -289,7 +295,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flo
     "strengthWeight": 0.8,
     "importanceWeight": 0.15,
     "deprecateThreshold": 0.15,
-    "pinThreshold": 8
+    "pinThreshold": 8,
+    "tierStability": { "working": 0.4, "episodic": 1, "semantic": 2.5, "procedural": 8 }
   },
   "consolidation": {
     "minStrength": 2,
@@ -298,21 +305,21 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flo
     "minClusterSize": 3,
     "maxPerRun": 3
   },
-  "search": { "k1": 1.5, "b": 0.75 },
+  "search": { "k1": 1.5, "b": 0.75, "fieldWeights": { "title": 5, "summary": 2, "body": 1 }, "stemming": true },
   "embeddings": { "provider": null },
   "redactPatterns": ["AKIA[0-9A-Z]{16}", "sk-[A-Za-z0-9]{20,}", "ghp_[A-Za-z0-9]{36}", "-----BEGIN [A-Z ]*PRIVATE KEY-----"]
 }
 ```
 
-`pinThreshold` 8 means any memory with `importance >= 8` is reported but never auto-deprecated. `deprecateThreshold` 0.15 is the retention floor below which an unpinned active memory becomes forgettable. Consolidation only considers episodic memories that are active, have `strength >= 2`, and are at least 14 days old. Missing keys merge over these defaults, so a partial config is fine.
+`pinThreshold` 8 means any memory with `importance >= 8` is reported but never auto-deprecated. `deprecateThreshold` 0.15 is the retention floor below which an unpinned active memory becomes forgettable. `tierStability` scales each tier's half-life. `search.fieldWeights` set the BM25F title/summary/body weighting and `search.stemming` toggles Porter stemming. Consolidation only considers episodic memories that are active, have `strength >= 2`, and are at least 14 days old. Missing keys merge over these defaults, so a partial config is fine.
 
 ## Status and roadmap
 
-v0.1, honest about its scope: single-user, local, no cloud sync, no auth, no telemetry, no network calls unless you explicitly configure an embedding provider. It is a tool one developer points at a folder and trusts.
+v0.2, honest about its scope: single-user, local, no cloud sync, no auth, no telemetry, no network calls unless you explicitly configure an embedding provider. It is a tool one developer points at a folder and trusts.
 
-Settled and working: the tiered model, the decay and reinforcement math, consolidation, BM25 search and recall, the CLI, the control-panel API, and the privacy scrub. The embedding layer ships with an OpenAI provider stub and is off by default.
+Settled and working: the tiered model with tier-aware decay, the decay and reinforcement math, consolidation, supersession/bi-temporal validity, BM25F search and recall, content-hash dedup, the cached store and incremental index, the CLI, the MCP server, the control-panel API, and the privacy scrub. The embedding layer ships with an OpenAI provider stub and is off by default. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) explains the design choices against the wider field, with citations and a fair share of skepticism about what memory actually buys you.
 
-Not in v1: multi-user vaults, sync, a hosted service, automatic `semantic → procedural` promotion (kept human-gated on purpose).
+Not yet: multi-user/namespaced vaults, sync, a hosted service, automatic `semantic → procedural` promotion (kept human-gated on purpose), and an optional WASM ANN backend for very large vaults.
 
 ## License
 
@@ -321,5 +328,6 @@ MIT. See [LICENSE](./LICENSE).
 ## Docs
 
 - [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) — the cognitive model and the decay math, with worked examples.
+- [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — how Engram compares to the agent-memory field, with citations and design rationale.
 - [docs/HISTORY.md](docs/HISTORY.md) — how Engram came to be.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the module map for contributors.
