@@ -8,12 +8,20 @@ import type { EngramConfig } from "./types.js";
 export const ENGRAM_DIR = ".engram";
 export const CONFIG_FILE = "config.json";
 
+const tierStabilitySchema = z.object({
+  working: z.number().min(0),
+  episodic: z.number().min(0),
+  semantic: z.number().min(0),
+  procedural: z.number().min(0),
+});
+
 const decaySchema = z.object({
   baseStability: z.number().positive(),
   strengthWeight: z.number().min(0),
   importanceWeight: z.number().min(0),
   deprecateThreshold: z.number().gt(0).lt(1),
   pinThreshold: z.number().int().min(1).max(10),
+  tierStability: tierStabilitySchema,
 });
 
 const consolidationSchema = z.object({
@@ -28,7 +36,12 @@ const configSchema = z.object({
   types: z.array(z.string()),
   decay: decaySchema,
   consolidation: consolidationSchema,
-  search: z.object({ k1: z.number().positive(), b: z.number().min(0).max(1) }),
+  search: z.object({
+    k1: z.number().positive(),
+    b: z.number().min(0).max(1),
+    fieldWeights: z.object({ title: z.number().min(0), summary: z.number().min(0), body: z.number().min(0) }),
+    stemming: z.boolean(),
+  }),
   embeddings: z.object({
     provider: z.union([z.literal("openai"), z.null()]),
     model: z.string().optional(),
@@ -44,6 +57,8 @@ export const DEFAULT_CONFIG: EngramConfig = {
     importanceWeight: 0.15,
     deprecateThreshold: 0.15,
     pinThreshold: 8,
+    // Tier half-life ladder: working fades fastest, procedural is near-permanent.
+    tierStability: { working: 0.4, episodic: 1, semantic: 2.5, procedural: 8 },
   },
   consolidation: {
     minStrength: 2,
@@ -52,7 +67,12 @@ export const DEFAULT_CONFIG: EngramConfig = {
     minClusterSize: 3,
     maxPerRun: 3,
   },
-  search: { k1: 1.5, b: 0.75 },
+  search: {
+    k1: 1.5,
+    b: 0.75,
+    fieldWeights: { title: 5, summary: 2, body: 1 },
+    stemming: true,
+  },
   embeddings: { provider: null },
   redactPatterns: [
     // Conservative defaults; users extend per vault.

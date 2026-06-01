@@ -40,6 +40,10 @@ export interface Frontmatter {
   tags: string[];
   links: MemoryLink[];
   summary: string;
+  /** Optional bi-temporal validity: the fact stops being "true" after this date. */
+  valid_until?: string;
+  /** Set when another memory superseded this one (non-lossy retirement). */
+  superseded_by?: string;
 }
 
 /** A memory loaded from disk: frontmatter + body + location. */
@@ -66,6 +70,10 @@ export interface MemoryInput {
   body?: string;
   /** Optional explicit id; generated when omitted. */
   id?: string;
+  /** Optional bi-temporal validity end date. */
+  valid_until?: string;
+  /** Skip content-hash dedup and always write a new file. */
+  allowDuplicate?: boolean;
 }
 
 // ----------------------------------------------------------------------------
@@ -83,6 +91,12 @@ export interface DecayConfig {
   deprecateThreshold: number;
   /** importance >= this is pinned: reported but never auto-deprecated. */
   pinThreshold: number;
+  /**
+   * Per-tier stability multiplier. The tiers are a half-life ladder: working
+   * memory is volatile, procedural rules are effectively permanent. A multiplier
+   * of 0 (or omitted → 1) means the tier uses base stability unchanged.
+   */
+  tierStability: Record<Tier, number>;
 }
 
 export interface ConsolidationConfig {
@@ -104,7 +118,14 @@ export interface EngramConfig {
   types: string[];
   decay: DecayConfig;
   consolidation: ConsolidationConfig;
-  search: { k1: number; b: number };
+  search: {
+    k1: number;
+    b: number;
+    /** BM25F per-field weights (title matters more than body). */
+    fieldWeights: FieldWeights;
+    /** Apply Porter stemming to tokens so word variants match. */
+    stemming: boolean;
+  };
   embeddings: EmbeddingsConfig;
   /** Patterns the privacy scrub redacts before write. */
   redactPatterns: string[];
@@ -171,6 +192,14 @@ export interface SearchOptions {
   type?: string;
   status?: MemoryStatus;
   limit?: number;
+  /** Include deprecated/superseded memories (default false unless `status` is set). */
+  includeDeprecated?: boolean;
+}
+
+export interface FieldWeights {
+  title: number;
+  summary: number;
+  body: number;
 }
 
 export interface SearchHit {
@@ -182,13 +211,20 @@ export interface SearchHit {
   snippet: string;
 }
 
+export interface FieldStats<T> {
+  title: T;
+  summary: T;
+  body: T;
+}
+
 export interface IndexFile {
   version: number;
   builtAt: string;
-  avgdl: number;
-  /** documentId -> { len, tf: Record<term, count>, meta } */
+  count: number;
+  /** Average length per field, for BM25F length normalization. */
+  fieldAvgdl: FieldStats<number>;
   docs: Record<string, IndexedDoc>;
-  /** term -> document frequency */
+  /** term -> combined document frequency (term present in any field of the doc). */
   df: Record<string, number>;
 }
 
@@ -199,13 +235,49 @@ export interface IndexedDoc {
   tier: Tier;
   type: string;
   status: MemoryStatus;
-  len: number;
-  tf: Record<string, number>;
+  /** File mtimeMs at index time, for incremental staleness detection. */
+  mtime: number;
+  fieldLen: FieldStats<number>;
+  /** Per-field term frequencies for BM25F. */
+  tf: FieldStats<Record<string, number>>;
   text: string; // stored for snippet generation
 }
 
 export interface EmbeddingProvider {
   embed(texts: string[]): Promise<number[][]>;
+}
+
+// ----------------------------------------------------------------------------
+// Context packing
+// ----------------------------------------------------------------------------
+
+export interface ContextEntry {
+  id: string;
+  title: string;
+  tier: Tier;
+  retention: number;
+}
+
+export interface ContextPack {
+  /** The formatted markdown block (empty string when nothing matched). */
+  text: string;
+  used: ContextEntry[];
+  /** Rough token estimate of `text` (~4 chars/token). */
+  tokensEstimate: number;
+  /** How many candidate memories were left out (budget, item cap, or dedup). */
+  dropped: number;
+}
+
+export interface PackOptions {
+  /** Approximate token budget for the whole block. Default 1500. */
+  budget?: number;
+  /** Hard cap on the number of memories included. Default 12. */
+  maxItems?: number;
+  tier?: Tier;
+  /** Include a short body excerpt under each entry. Default false (summaries only). */
+  includeBody?: boolean;
+  /** Override the header line. */
+  header?: string;
 }
 
 // ----------------------------------------------------------------------------

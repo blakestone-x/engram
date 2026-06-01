@@ -1,97 +1,188 @@
 /**
- * Lexical search over the vault: a pure-TypeScript inverted index with BM25
- * ranking, persisted to `.engram/index.json`. No native dependency, no server —
- * the index is just JSON derived from the `.md` files and is fully rebuildable.
+ * Lexical search: a pure-TypeScript BM25F index persisted to `.engram/index.json`.
+ *
+ * v0.2 changes:
+ * - **BM25F** — title, summary, and body are weighted fields with their own length
+ *   normalization, combined before the k1 saturation, using a combined document
+ *   frequency for IDF. This replaces v0.1's title-repetition hack, which distorted
+ *   document length and term statistics.
+ * - **Self-healing incremental index** — `ensureIndex` compares the vault's per-file
+ *   mtimes against the index and reconciles only changed/added/removed documents,
+ *   so a write no longer triggers a full rebuild.
+ * - **Deprecated memories are excluded by default** (set `includeDeprecated` to keep them).
+ * - Optional Porter **stemming** so word variants match.
+ *
+ * The index is derived and rebuildable from the `.md` files alone.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ENGRAM_DIR } from "./config.js";
-import { tokenize } from "./tokens.js";
-import { appendRun, listMemories } from "./vault.js";
-import type { IndexedDoc, IndexFile, Memory, SearchHit, SearchOptions, Vault } from "./types.js";
+import { analyze, tokenize } from "./tokens.js";
+import { appendRun } from "./vault.js";
+import { storeMemories, storeSignature } from "./store.js";
+import type { FieldStats, IndexedDoc, IndexFile, Memory, SearchHit, SearchOptions, Vault } from "./types.js";
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
+const FIELDS = ["title", "summary", "body"] as const;
+type Field = (typeof FIELDS)[number];
+
+/** In-process parsed-index cache, keyed by vault root. Avoids re-parsing index.json per query. */
+const indexCache = new Map<string, IndexFile>();
 
 function indexPath(vault: Vault): string {
   return join(vault.root, ENGRAM_DIR, "index.json");
 }
 
-/** Title weight for indexing: a title term counts as TITLE_BOOST occurrences. */
-const TITLE_BOOST = 3;
-
-/** Indexed text (title field-boosted) used for tf/df. */
-function indexText(m: Memory): string {
-  // Repeat the title so an exact-title match outranks an incidental body mention
-  // (field boost within the single-bag BM25 model).
-  const title = `${m.frontmatter.title}\n`.repeat(TITLE_BOOST);
-  return `${title}${m.frontmatter.summary}\n${m.body}`;
+function fieldText(m: Memory, field: Field): string {
+  if (field === "title") return m.frontmatter.title;
+  if (field === "summary") return m.frontmatter.summary;
+  return m.body;
 }
 
-/** Natural text used only for snippet extraction (no boost repetition). */
 function snippetText(m: Memory): string {
   return `${m.frontmatter.title}\n${m.frontmatter.summary}\n${m.body}`;
 }
 
-/** Build (or rebuild) the index from the markdown sources. */
-export function buildIndex(vault: Vault, log = false): IndexFile {
-  const docs: Record<string, IndexedDoc> = {};
-  const df: Record<string, number> = {};
-  let totalLen = 0;
+function emptyFieldStats<T>(value: () => T): FieldStats<T> {
+  return { title: value(), summary: value(), body: value() };
+}
 
-  for (const m of listMemories(vault)) {
-    const tokens = tokenize(indexText(m));
-    const tf: Record<string, number> = {};
-    for (const t of tokens) tf[t] = (tf[t] ?? 0) + 1;
-    for (const term of Object.keys(tf)) df[term] = (df[term] ?? 0) + 1;
-    const len = tokens.length;
-    totalLen += len;
-    docs[m.frontmatter.id] = {
-      id: m.frontmatter.id,
-      path: m.path,
-      title: m.frontmatter.title,
-      tier: m.frontmatter.tier,
-      type: m.frontmatter.type,
-      status: m.frontmatter.status,
-      len,
-      tf,
-      text: snippetText(m),
-    };
+function buildDoc(m: Memory, mtime: number, stem: boolean): IndexedDoc {
+  const tf = emptyFieldStats<Record<string, number>>(() => ({}));
+  const fieldLen = emptyFieldStats<number>(() => 0);
+  for (const field of FIELDS) {
+    const toks = analyze(fieldText(m, field), stem);
+    fieldLen[field] = toks.length;
+    for (const t of toks) tf[field][t] = (tf[field][t] ?? 0) + 1;
   }
+  return {
+    id: m.frontmatter.id,
+    path: m.path,
+    title: m.frontmatter.title,
+    tier: m.frontmatter.tier,
+    type: m.frontmatter.type,
+    status: m.frontmatter.status,
+    mtime,
+    fieldLen,
+    tf,
+    text: snippetText(m),
+  };
+}
 
-  const count = Object.keys(docs).length;
+function uniqueTerms(doc: IndexedDoc): Set<string> {
+  return new Set([...Object.keys(doc.tf.title), ...Object.keys(doc.tf.summary), ...Object.keys(doc.tf.body)]);
+}
+
+function addToDf(index: IndexFile, doc: IndexedDoc): void {
+  for (const term of uniqueTerms(doc)) index.df[term] = (index.df[term] ?? 0) + 1;
+}
+
+function removeFromDf(index: IndexFile, doc: IndexedDoc): void {
+  for (const term of uniqueTerms(doc)) {
+    const next = (index.df[term] ?? 0) - 1;
+    if (next <= 0) delete index.df[term];
+    else index.df[term] = next;
+  }
+}
+
+function recomputeAggregates(index: IndexFile): void {
+  const docs = Object.values(index.docs);
+  index.count = docs.length;
+  for (const field of FIELDS) {
+    const total = docs.reduce((sum, d) => sum + d.fieldLen[field], 0);
+    index.fieldAvgdl[field] = docs.length ? total / docs.length : 0;
+  }
+}
+
+function writeIndex(vault: Vault, index: IndexFile): void {
+  const path = indexPath(vault);
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, JSON.stringify(index), "utf8");
+  renameSync(tmp, path);
+  indexCache.set(vault.root, index);
+}
+
+/** Build (or rebuild) the entire index from the markdown sources. */
+export function buildIndex(vault: Vault, log = false): IndexFile {
+  const stem = vault.config.search.stemming;
+  const sig = storeSignature(vault.root);
   const index: IndexFile = {
     version: INDEX_VERSION,
     builtAt: new Date().toISOString(),
-    avgdl: count ? totalLen / count : 0,
-    docs,
-    df,
+    count: 0,
+    fieldAvgdl: emptyFieldStats<number>(() => 0),
+    docs: {},
+    df: {},
   };
-
-  const path = indexPath(vault);
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(index), "utf8");
-  if (log) appendRun(vault, { kind: "reindex", at: index.builtAt, detail: { indexed: count } });
+  for (const m of storeMemories(vault.root)) {
+    const doc = buildDoc(m, sig.get(m.frontmatter.id) ?? 0, stem);
+    index.docs[doc.id] = doc;
+    addToDf(index, doc);
+  }
+  recomputeAggregates(index);
+  writeIndex(vault, index);
+  if (log) appendRun(vault, { kind: "reindex", at: index.builtAt, detail: { indexed: index.count } });
   return index;
 }
 
-/** Load the index, rebuilding if it is missing or a stale version. */
+/** Reconcile an existing index against the current vault, touching only changes. */
+function reconcile(vault: Vault, index: IndexFile): IndexFile {
+  const stem = vault.config.search.stemming;
+  const sig = storeSignature(vault.root);
+  let changed = false;
+
+  for (const id of Object.keys(index.docs)) {
+    if (!sig.has(id)) {
+      removeFromDf(index, index.docs[id] as IndexedDoc);
+      delete index.docs[id];
+      changed = true;
+    }
+  }
+  for (const m of storeMemories(vault.root)) {
+    const id = m.frontmatter.id;
+    const mtime = sig.get(id) ?? 0;
+    const cur = index.docs[id];
+    if (cur && cur.mtime === mtime) continue;
+    if (cur) removeFromDf(index, cur);
+    const doc = buildDoc(m, mtime, stem);
+    index.docs[id] = doc;
+    addToDf(index, doc);
+    changed = true;
+  }
+
+  if (changed) {
+    recomputeAggregates(index);
+    index.builtAt = new Date().toISOString();
+    writeIndex(vault, index);
+  }
+  return index;
+}
+
+/** Load the index, rebuilding on version change and reconciling incremental edits. */
 export function ensureIndex(vault: Vault): IndexFile {
+  const cached = indexCache.get(vault.root);
+  if (cached) return reconcile(vault, cached);
+
   const path = indexPath(vault);
   if (!existsSync(path)) return buildIndex(vault);
+  let parsed: IndexFile;
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as IndexFile;
-    if (parsed.version !== INDEX_VERSION) return buildIndex(vault);
-    return parsed;
+    parsed = JSON.parse(readFileSync(path, "utf8")) as IndexFile;
   } catch {
     return buildIndex(vault);
   }
+  if (parsed.version !== INDEX_VERSION || !parsed.fieldAvgdl) return buildIndex(vault);
+  indexCache.set(vault.root, parsed);
+  return reconcile(vault, parsed);
 }
 
-function bm25(tf: number, df: number, n: number, len: number, avgdl: number, k1: number, b: number): number {
-  const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
-  const denom = tf + k1 * (1 - b + (b * len) / (avgdl || 1));
-  return idf * ((tf * (k1 + 1)) / (denom || 1));
+/** Drop the in-process index cache (tests / external-edit refresh). */
+export function invalidateIndex(root?: string): void {
+  if (root) indexCache.delete(root);
+  else indexCache.clear();
 }
 
 function snippetFor(text: string, queryTerms: Set<string>, window = 30): string {
@@ -103,26 +194,42 @@ function snippetFor(text: string, queryTerms: Set<string>, window = 30): string 
   return `${start > 0 ? "… " : ""}${slice}${start + window < words.length ? " …" : ""}`;
 }
 
-/** BM25 search with optional tier/type/status filters. */
+/** BM25F search with field weighting, filters, and default deprecated exclusion. */
 export function search(vault: Vault, query: string, options: SearchOptions = {}): SearchHit[] {
   const index = ensureIndex(vault);
-  const terms = tokenize(query);
-  if (terms.length === 0) return [];
-  const termSet = new Set(terms);
-  const { k1, b } = vault.config.search;
-  const n = Object.keys(index.docs).length;
+  const stem = vault.config.search.stemming;
+  const terms = new Set(analyze(query, stem));
+  if (terms.size === 0) return [];
+  const rawTerms = new Set(tokenize(query)); // for snippet highlighting (unstemmed)
+
+  const { k1, b, fieldWeights } = vault.config.search;
+  const n = index.count;
   const limit = options.limit ?? 10;
 
   const hits: SearchHit[] = [];
   for (const doc of Object.values(index.docs)) {
     if (options.tier && doc.tier !== options.tier) continue;
     if (options.type && doc.type !== options.type) continue;
-    if (options.status && doc.status !== options.status) continue;
+    if (options.status) {
+      if (doc.status !== options.status) continue;
+    } else if (!options.includeDeprecated && doc.status === "deprecated") {
+      continue;
+    }
+
     let score = 0;
-    for (const term of termSet) {
-      const tf = doc.tf[term];
-      if (!tf) continue;
-      score += bm25(tf, index.df[term] ?? 0, n, doc.len, index.avgdl, k1, b);
+    for (const term of terms) {
+      let combined = 0;
+      for (const field of FIELDS) {
+        const tf = doc.tf[field][term];
+        if (!tf) continue;
+        const avg = index.fieldAvgdl[field] || 1;
+        const norm = 1 - b + b * (doc.fieldLen[field] / avg);
+        combined += (fieldWeights[field] * tf) / (norm || 1);
+      }
+      if (combined <= 0) continue;
+      const df = index.df[term] ?? 0;
+      const idf = Math.log(1 + (n - df + 0.5) / (df + 0.5));
+      score += idf * (combined / (k1 + combined));
     }
     if (score <= 0) continue;
     hits.push({
@@ -131,7 +238,7 @@ export function search(vault: Vault, query: string, options: SearchOptions = {})
       title: doc.title,
       tier: doc.tier,
       score,
-      snippet: snippetFor(doc.text, termSet),
+      snippet: snippetFor(doc.text, rawTerms),
     });
   }
 

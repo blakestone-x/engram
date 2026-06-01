@@ -4,6 +4,8 @@
  * query" use the same notion of a word.
  */
 
+import { porterStem } from "./stemmer.js";
+
 const STOPWORDS = new Set([
   "the", "and", "for", "with", "that", "this", "from", "into", "onto", "over",
   "are", "was", "were", "has", "have", "had", "not", "but", "you", "your",
@@ -20,9 +22,15 @@ export function tokenize(text: string): string[] {
   return matches.filter((t) => !STOPWORDS.has(t));
 }
 
+/** Tokenize, optionally Porter-stemming each token. Index and query must agree. */
+export function analyze(text: string, stem: boolean): string[] {
+  const tokens = tokenize(text);
+  return stem ? tokens.map((t) => (/[a-z]/.test(t) ? porterStem(t) : t)) : tokens;
+}
+
 /** A bounded token *set* for similarity work (order-free, capped). */
-export function tokenSet(text: string, cap = 80): Set<string> {
-  return new Set(tokenize(text).slice(0, cap));
+export function tokenSet(text: string, cap = 80, stem = false): Set<string> {
+  return new Set(analyze(text, stem).slice(0, cap));
 }
 
 /** Jaccard similarity between two token sets. */

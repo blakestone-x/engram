@@ -13,6 +13,7 @@ import { buildGraph } from "./graph.js";
 import { recall } from "./recall.js";
 import { buildIndex, search } from "./search.js";
 import { vaultStats } from "./stats.js";
+import { refreshStore } from "./store.js";
 import { getMemory, listMemories, readRuns, reinforce } from "./vault.js";
 import type { Tier, Vault } from "./types.js";
 
@@ -60,6 +61,7 @@ export function createServer(vault: Vault, options: ServerOptions = {}) {
 
     try {
       if (path.startsWith("/api/")) {
+        refreshStore(vault.root); // reflect external edits made since the last request
         await handleApi(vault, req, res, method, path, url);
         return;
       }
