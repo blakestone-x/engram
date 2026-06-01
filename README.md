@@ -1,5 +1,6 @@
 # Engram
 
+[![CI](https://github.com/blakestone-x/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/blakestone-x/engram/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-3fb950.svg)](https://nodejs.org)
 
