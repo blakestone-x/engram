@@ -105,6 +105,18 @@ $ engram context "how should we reach this customer" --budget 800
 
 It fills the block in `recall` order and stops before the budget is exceeded, so a larger vault costs the same per call. This is the primitive the MCP server's `engram_context` tool wraps.
 
+### Hybrid search (optional embeddings)
+
+Engram is lexical-only and fully offline by default. To add semantic recall, give it an embedding key — Engram reads `OPENAI_API_KEY` from a gitignored `.env` at the vault root (it is never committed or sent anywhere else):
+
+```bash
+echo "OPENAI_API_KEY=sk-..." > .env     # at the vault root; already gitignored
+engram vectors                          # embeds every memory, flips config to openai
+engram search "how do we reach the customer" --hybrid
+```
+
+`engram vectors` builds `.engram/vectors.json` and sets `embeddings.provider` in your config. `search --hybrid` then fuses BM25 with embedding cosine via Reciprocal Rank Fusion, recovering paraphrase matches that lexical search misses. With no key, none of this runs and nothing leaves the machine.
+
 ### Reinforce what proved useful
 
 ```bash

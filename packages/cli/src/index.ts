@@ -15,17 +15,22 @@ import Table from "cli-table3";
 import {
   addMemory,
   buildIndex,
+  buildVectors,
   createServer,
   doctor,
   findVaultRoot,
+  getProvider,
   initVault,
+  loadEnv,
   openVault,
   packContext,
   recall,
   reinforce,
   runConsolidation,
   runDecay,
+  saveConfig,
   search,
+  semanticSearch,
   updateMemory,
   vaultStats,
   type Tier,
@@ -40,6 +45,8 @@ function resolveVault(dir?: string): Vault {
     console.error(pc.red("No Engram vault found. Run `engram init` here first."));
     process.exit(1);
   }
+  // Load a .env (vault root, then cwd) so an embedding key need not be exported.
+  loadEnv(root, process.cwd());
   return openVault(root);
 }
 
@@ -119,21 +126,25 @@ program
 program
   .command("search")
   .argument("<query...>", "query terms")
-  .description("BM25 search across the vault")
+  .description("BM25 search across the vault (add --hybrid to fuse with embeddings)")
   .option("--tier <tier>", "filter by tier")
   .option("--type <type>", "filter by type")
   .option("--status <status>", "filter by status")
   .option("--limit <n>", "max results", "10")
+  .option("--hybrid", "fuse lexical BM25 with embedding similarity (requires an embedding provider)")
   .option("--json", "output JSON")
   .option("-d, --dir <dir>", "vault directory")
-  .action((query: string[], opts) => {
+  .action(async (query: string[], opts) => {
     const vault = resolveVault(opts.dir);
-    const hits = search(vault, query.join(" "), {
-      tier: opts.tier,
-      type: opts.type,
-      status: opts.status,
-      limit: Number(opts.limit),
-    });
+    const q = query.join(" ");
+    const hits = opts.hybrid
+      ? await semanticSearch(vault, q, Number(opts.limit))
+      : search(vault, q, {
+          tier: opts.tier,
+          type: opts.type,
+          status: opts.status,
+          limit: Number(opts.limit),
+        });
     if (opts.json) return console.log(JSON.stringify(hits, null, 2));
     if (hits.length === 0) return console.log(pc.dim("No matches."));
     for (const h of hits) {
@@ -239,6 +250,31 @@ program
     summary.clusters.forEach((c, i) => {
       console.log(`  cluster ${i + 1}: ${c.sourceIds.length} sources · ${pc.dim(c.sharedTokens.join(", "))}`);
     });
+  });
+
+program
+  .command("vectors")
+  .description("Build the embedding index for hybrid search (needs OPENAI_API_KEY in .env or env)")
+  .option("--model <model>", "embedding model", "text-embedding-3-small")
+  .option("-d, --dir <dir>", "vault directory")
+  .action(async (opts) => {
+    const vault = resolveVault(opts.dir);
+    if (!process.env.OPENAI_API_KEY) {
+      console.error(pc.red("OPENAI_API_KEY is not set. Put it in a .env at the vault root (gitignored), e.g. OPENAI_API_KEY=sk-..."));
+      process.exit(1);
+    }
+    if (vault.config.embeddings.provider !== "openai") {
+      vault.config.embeddings = { provider: "openai", model: opts.model };
+      saveConfig(vault.root, vault.config);
+      console.log(pc.dim(`Set embeddings.provider = openai (${opts.model}) in .engram/config.json`));
+    }
+    if (!getProvider(vault.config)) {
+      console.error(pc.red("No embedding provider resolved."));
+      process.exit(1);
+    }
+    console.log(pc.dim("Embedding memories…"));
+    const count = await buildVectors(vault);
+    console.log(pc.green(`Built vectors for ${count} memories. Use \`engram search <q> --hybrid\`.`));
   });
 
 program

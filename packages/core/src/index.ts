@@ -38,6 +38,9 @@ export { tokenize, jaccard } from "./tokens.js";
 // Privacy
 export { scrub } from "./privacy.js";
 
+// Env (.env loader for the optional embedding key)
+export { loadEnv } from "./env.js";
+
 // Decay
 export {
   retentionFor,
