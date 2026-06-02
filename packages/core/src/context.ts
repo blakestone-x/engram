@@ -26,7 +26,7 @@ function firstLine(body: string): string {
 export function packContext(vault: Vault, query: string, options: PackOptions = {}): ContextPack {
   const budget = options.budget ?? 1500;
   const maxItems = options.maxItems ?? 12;
-  const hits = recall(vault, query, { tier: options.tier, limit: maxItems * 3 });
+  const hits = recall(vault, query, { tier: options.tier, scope: options.scope, limit: maxItems * 3 });
   if (hits.length === 0) return { text: "", used: [], tokensEstimate: 0, dropped: 0 };
 
   const header = options.header ?? `# Recalled memory for: ${query}`;

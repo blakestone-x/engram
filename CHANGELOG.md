@@ -4,6 +4,47 @@ All notable changes to Engram are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-01
+
+A multi-agent + cross-platform release, plus a real hybrid-search bug fix. Engram
+becomes a memory layer many agents and platforms can share. See
+[docs/MULTI-AGENT.md](docs/MULTI-AGENT.md).
+
+### Fixed
+
+- **Hybrid search dropped semantic-only matches (bug).** `semanticSearch` only
+  returned memories that were also in the lexical top-N, so a memory that
+  vector-matched a paraphrase but shared no keywords was silently excluded —
+  defeating the purpose of embeddings. It now surfaces semantic-only matches and
+  ranks by the fused RRF score.
+
+### Added
+
+- **Namespaces / scopes** — optional `scope`, `author`, and `visibility`
+  (`private` | `shared` | `global`) frontmatter. Recall is scoped (default-isolate
+  with a global/unscoped fallback), so concurrent agents don't contaminate each
+  other. Threaded through the CLI (`add --scope/--author/--visibility`,
+  `recall --scope`) and every MCP tool.
+- **Reinforce-on-recall** — opt-in (`recall --reinforce`, or `reinforce: true` in
+  the library): each recall the agent acts on reinforces the top results, closing
+  the spaced-repetition loop the decay model assumes.
+- **Portable export / import** — `engram export` writes a JSON-Lines bundle (one
+  memory per line, all frontmatter + body); `engram import` reads it back, keyed on
+  `id` so it is idempotent. Your memory is `git clone`-able and lock-in-free.
+- **docs/MULTI-AGENT.md** — the namespacing, shared-blackboard, concurrency,
+  git-as-sync, provenance/audit, and portability model, with the design rationale
+  (including why Engram deliberately avoids CRDTs).
+
+### Changed
+
+- **`buildVectors` is incremental, batched, and model-stamped** — only memories
+  whose content changed are re-embedded (content-hash gated), requests are chunked
+  so a large vault doesn't exceed provider limits, and the file records model +
+  dimension (a query/index dimension mismatch falls back to lexical instead of
+  returning garbage). `engram vectors --rebuild` forces a full re-embed.
+- **Parsed vectors are cached in-process** — no JSON re-parse of the vector file on
+  every hybrid query.
+
 ## [0.2.0] - 2026-06-01
 
 A performance and retrieval-quality release, informed by a survey of the agent-memory
@@ -104,5 +145,6 @@ for AI agents — single-user, offline by default, no telemetry.
 - `@engram/core` has zero native dependencies and runs on a clean machine with
   only Node ≥ 20.
 
+[0.3.0]: https://github.com/blakestone-x/engram/releases/tag/v0.3.0
 [0.2.0]: https://github.com/blakestone-x/engram/releases/tag/v0.2.0
 [0.1.0]: https://github.com/blakestone-x/engram/releases/tag/v0.1.0

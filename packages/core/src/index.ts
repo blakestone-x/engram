@@ -64,11 +64,23 @@ export { recall, type RecallHit, type RecallOptions } from "./recall.js";
 // Context packing (token-budgeted retrieval for prompt injection)
 export { packContext, estimateTokens } from "./context.js";
 
+// Multi-agent namespacing + portability
+export { inScope } from "./scope.js";
+export { exportJsonl, importJsonl, type ImportResult } from "./export.js";
+
 // Store cache control (mainly for tests / long-running hosts)
 export { invalidateStore, refreshStore } from "./store.js";
 
 // Optional semantic layer
-export { getProvider, buildVectors, semanticSearch, fuse, OpenAIEmbeddingProvider } from "./embeddings.js";
+export {
+  getProvider,
+  buildVectors,
+  semanticSearch,
+  fuse,
+  invalidateVectors,
+  OpenAIEmbeddingProvider,
+  type BuildVectorsResult,
+} from "./embeddings.js";
 
 // Stats, graph, doctor
 export { vaultStats } from "./stats.js";

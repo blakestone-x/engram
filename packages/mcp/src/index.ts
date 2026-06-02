@@ -45,7 +45,7 @@ const TIERS = ["working", "episodic", "semantic", "procedural"] as const;
 
 async function main(): Promise<void> {
   const vault = resolveVault();
-  const server = new McpServer({ name: "engram", version: "0.2.0" });
+  const server = new McpServer({ name: "engram", version: "0.3.0" });
 
   server.tool(
     "engram_context",
@@ -54,9 +54,10 @@ async function main(): Promise<void> {
       query: z.string().describe("What the agent is about to do or reason about."),
       budget: z.number().int().min(100).max(8000).optional().describe("Approximate token budget (default 1500)."),
       tier: z.enum(TIERS).optional().describe("Restrict to one memory tier."),
+      scope: z.string().optional().describe("Namespace to recall within (plus global/unscoped memories)."),
     },
-    async ({ query, budget, tier }) => {
-      const pack = packContext(vault, query, { budget: budget ?? 1500, tier: tier as Tier | undefined });
+    async ({ query, budget, tier, scope }) => {
+      const pack = packContext(vault, query, { budget: budget ?? 1500, tier: tier as Tier | undefined, scope });
       const text = pack.used.length
         ? pack.text
         : `No relevant memories for "${query}".`;
@@ -71,10 +72,11 @@ async function main(): Promise<void> {
       query: z.string(),
       limit: z.number().int().min(1).max(50).optional().describe("Max results (default 8)."),
       as_of: z.string().optional().describe("ISO date (YYYY-MM-DD): evaluate memory as of this point in time."),
+      scope: z.string().optional().describe("Namespace to recall within (plus global/unscoped memories)."),
     },
-    async ({ query, limit, as_of }) => {
+    async ({ query, limit, as_of, scope }) => {
       const asOf = as_of ? new Date(`${as_of.slice(0, 10)}T00:00:00Z`) : undefined;
-      const hits = recall(vault, query, { limit: limit ?? 8, asOf });
+      const hits = recall(vault, query, { limit: limit ?? 8, asOf, scope });
       if (hits.length === 0) return { content: [{ type: "text", text: `No matches for "${query}".` }] };
       const lines = hits.map(
         (h) => `- [${h.tier}] ${h.title} (id ${h.id}, retention ${(h.retention * 100).toFixed(0)}%, x${h.strength})\n    ${h.snippet}`,
@@ -94,8 +96,11 @@ async function main(): Promise<void> {
       importance: z.number().int().min(1).max(10).optional().describe("1-10; >=8 is pinned and never decays."),
       tags: z.array(z.string()).optional(),
       summary: z.string().optional().describe("One-line summary for retrieval snippets."),
+      scope: z.string().optional().describe("Namespace (agent/project/user) — for multi-agent isolation."),
+      author: z.string().optional().describe("Who is writing this (provenance/audit)."),
+      visibility: z.enum(["private", "shared", "global"]).optional(),
     },
-    async ({ title, content, tier, type, importance, tags, summary }) => {
+    async ({ title, content, tier, type, importance, tags, summary, scope, author, visibility }) => {
       const memory = addMemory(vault, {
         title,
         tier: (tier as Tier) ?? "working",
@@ -104,6 +109,9 @@ async function main(): Promise<void> {
         tags: tags ?? [],
         summary: summary ?? "",
         body: content,
+        scope,
+        author,
+        visibility,
       });
       return {
         content: [{ type: "text", text: `Remembered "${title}" as ${memory.frontmatter.id} in ${memory.frontmatter.tier}.` }],

@@ -1,6 +1,6 @@
 {
   "name": "@engram/mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model Context Protocol server for Engram — give any MCP-capable agent a tiered, decaying long-term memory.",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,7 @@
     "lint": "tsc -b --noEmit || true"
   },
   "dependencies": {
-    "@engram/core": "0.2.0",
+    "@engram/core": "0.3.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.1"
   },

@@ -44,7 +44,16 @@ export interface Frontmatter {
   valid_until?: string;
   /** Set when another memory superseded this one (non-lossy retirement). */
   superseded_by?: string;
+  /** Multi-agent namespace this memory belongs to (absent = global / unscoped). */
+  scope?: string;
+  /** Who wrote this memory (agent or user id) — provenance for audit. */
+  author?: string;
+  /** Visibility within multi-agent use. */
+  visibility?: Visibility;
 }
+
+/** Multi-agent visibility of a memory within and across namespaces. */
+export type Visibility = "private" | "shared" | "global";
 
 /** A memory loaded from disk: frontmatter + body + location. */
 export interface Memory {
@@ -74,6 +83,12 @@ export interface MemoryInput {
   valid_until?: string;
   /** Skip content-hash dedup and always write a new file. */
   allowDuplicate?: boolean;
+  /** Multi-agent namespace. */
+  scope?: string;
+  /** Provenance: who wrote this memory. */
+  author?: string;
+  /** Visibility within multi-agent use. */
+  visibility?: Visibility;
 }
 
 // ----------------------------------------------------------------------------
@@ -274,6 +289,8 @@ export interface PackOptions {
   /** Hard cap on the number of memories included. Default 12. */
   maxItems?: number;
   tier?: Tier;
+  /** Restrict to a namespace (plus global/unscoped memories). */
+  scope?: string;
   /** Include a short body excerpt under each entry. Default false (summaries only). */
   includeBody?: boolean;
   /** Override the header line. */

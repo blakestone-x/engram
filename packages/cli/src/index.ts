@@ -8,7 +8,7 @@
 
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import Table from "cli-table3";
@@ -18,8 +18,10 @@ import {
   buildVectors,
   createServer,
   doctor,
+  exportJsonl,
   findVaultRoot,
   getProvider,
+  importJsonl,
   initVault,
   loadEnv,
   openVault,
@@ -71,7 +73,7 @@ function retentionColor(r: number): (s: string) => string {
 program
   .name("engram")
   .description("Local-first, markdown-native memory for AI agents.")
-  .version("0.2.0");
+  .version("0.3.0");
 
 program
   .command("init")
@@ -107,6 +109,9 @@ program
   .option("--tags <tags>", "comma-separated tags")
   .option("-s, --summary <summary>", "one-line summary")
   .option("-b, --body <body>", "memory body, or '-' to read stdin")
+  .option("--scope <scope>", "multi-agent namespace (agent/project/user)")
+  .option("--author <author>", "who is writing this (provenance)")
+  .option("--visibility <v>", "private | shared | global")
   .option("-d, --dir <dir>", "vault directory")
   .action((opts) => {
     const vault = resolveVault(opts.dir);
@@ -119,6 +124,9 @@ program
       tags: opts.tags ? String(opts.tags).split(",").map((s: string) => s.trim()) : [],
       summary: opts.summary,
       body,
+      scope: opts.scope,
+      author: opts.author,
+      visibility: opts.visibility,
     });
     console.log(pc.green(`Added ${pc.bold(memory.frontmatter.id)}  ${memory.path}`));
   });
@@ -160,6 +168,8 @@ program
   .option("--limit <n>", "max results", "10")
   .option("--as-of <date>", "evaluate memory as of a past date (YYYY-MM-DD)")
   .option("--include-deprecated", "include deprecated/superseded memories")
+  .option("--scope <scope>", "restrict to a namespace (plus global/unscoped memories)")
+  .option("--reinforce", "reinforce the top results (spaced repetition)")
   .option("--json", "output JSON")
   .option("-d, --dir <dir>", "vault directory")
   .action((query: string[], opts) => {
@@ -169,6 +179,8 @@ program
       limit: Number(opts.limit),
       asOf,
       includeDeprecated: Boolean(opts.includeDeprecated),
+      scope: opts.scope,
+      reinforce: Boolean(opts.reinforce),
     });
     if (opts.json) return console.log(JSON.stringify(hits, null, 2));
     if (hits.length === 0) return console.log(pc.dim("No matches."));
@@ -184,6 +196,7 @@ program
   .description("Pack a token-budgeted block of the most relevant memories for prompt injection")
   .option("--budget <n>", "approximate token budget", "1500")
   .option("--tier <tier>", "restrict to one tier")
+  .option("--scope <scope>", "restrict to a namespace (plus global/unscoped memories)")
   .option("--body", "include a short body excerpt under each entry")
   .option("--json", "output JSON (text + used + tokensEstimate)")
   .option("-d, --dir <dir>", "vault directory")
@@ -192,6 +205,7 @@ program
     const pack = packContext(vault, query.join(" "), {
       budget: Number(opts.budget),
       tier: opts.tier as Tier | undefined,
+      scope: opts.scope,
       includeBody: Boolean(opts.body),
     });
     if (opts.json) return console.log(JSON.stringify(pack, null, 2));
@@ -256,6 +270,7 @@ program
   .command("vectors")
   .description("Build the embedding index for hybrid search (needs OPENAI_API_KEY in .env or env)")
   .option("--model <model>", "embedding model", "text-embedding-3-small")
+  .option("--rebuild", "re-embed every memory (ignore the incremental hash cache)")
   .option("-d, --dir <dir>", "vault directory")
   .action(async (opts) => {
     const vault = resolveVault(opts.dir);
@@ -273,8 +288,11 @@ program
       process.exit(1);
     }
     console.log(pc.dim("Embedding memories…"));
-    const count = await buildVectors(vault);
-    console.log(pc.green(`Built vectors for ${count} memories. Use \`engram search <q> --hybrid\`.`));
+    const r = await buildVectors(vault, { rebuild: Boolean(opts.rebuild) });
+    console.log(
+      pc.green(`Vectors ready for ${r.total} memories`) +
+        pc.dim(` (${r.embedded} embedded, ${r.reused} reused). Use \`engram search <q> --hybrid\`.`),
+    );
   });
 
 program
@@ -337,6 +355,35 @@ program
     const vault = resolveVault(opts.dir);
     const index = buildIndex(vault, true);
     console.log(pc.green(`Indexed ${Object.keys(index.docs).length} memories.`));
+  });
+
+program
+  .command("export")
+  .description("Export every memory as a portable JSON-Lines bundle (to stdout or a file)")
+  .option("-o, --out <file>", "write to a file instead of stdout")
+  .option("-d, --dir <dir>", "vault directory")
+  .action((opts) => {
+    const vault = resolveVault(opts.dir);
+    const jsonl = exportJsonl(vault);
+    if (opts.out) {
+      writeFileSync(resolve(opts.out), `${jsonl}\n`, "utf8");
+      console.log(pc.green(`Exported ${jsonl.split("\n").filter(Boolean).length} memories → ${opts.out}`));
+    } else {
+      process.stdout.write(`${jsonl}\n`);
+    }
+  });
+
+program
+  .command("import")
+  .argument("<file>", "JSON-Lines bundle to import ('-' for stdin)")
+  .description("Import memories from a JSON-Lines bundle (id is the merge key; existing ids are skipped)")
+  .option("-d, --dir <dir>", "vault directory")
+  .action((file: string, opts) => {
+    const vault = resolveVault(opts.dir);
+    const jsonl = file === "-" ? readStdin() : readFileSync(resolve(file), "utf8");
+    const { imported, skipped } = importJsonl(vault, jsonl);
+    buildIndex(vault);
+    console.log(pc.green(`Imported ${imported} memories`) + pc.dim(` (${skipped} skipped — id already present).`));
   });
 
 program

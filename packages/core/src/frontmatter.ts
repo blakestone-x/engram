@@ -108,6 +108,11 @@ export function coerceFrontmatter(data: Record<string, unknown>, fallbackTitle: 
   }
   const superseded = asId(data.superseded_by);
   if (superseded) fm.superseded_by = superseded;
+  if (typeof data.scope === "string" && data.scope.trim()) fm.scope = data.scope.trim();
+  if (typeof data.author === "string" && data.author.trim()) fm.author = data.author.trim();
+  if (data.visibility === "private" || data.visibility === "shared" || data.visibility === "global") {
+    fm.visibility = data.visibility;
+  }
   return fm;
 }
 
@@ -131,6 +136,9 @@ export function frontmatterFromInput(input: MemoryInput): Frontmatter {
     summary: input.summary ?? "",
   };
   if (input.valid_until) fm.valid_until = input.valid_until.slice(0, 10);
+  if (input.scope) fm.scope = input.scope;
+  if (input.author) fm.author = input.author;
+  if (input.visibility) fm.visibility = input.visibility;
   return fm;
 }
 
@@ -152,9 +160,12 @@ const KEY_ORDER: (keyof Frontmatter)[] = [
 export function serializeMemory(frontmatter: Frontmatter, body: string): string {
   const ordered: Record<string, unknown> = {};
   for (const key of KEY_ORDER) ordered[key] = frontmatter[key];
-  // Optional bi-temporal fields are emitted only when set, to keep files clean.
+  // Optional bi-temporal + multi-agent fields are emitted only when set.
   if (frontmatter.valid_until) ordered.valid_until = frontmatter.valid_until;
   if (frontmatter.superseded_by) ordered.superseded_by = frontmatter.superseded_by;
+  if (frontmatter.scope) ordered.scope = frontmatter.scope;
+  if (frontmatter.author) ordered.author = frontmatter.author;
+  if (frontmatter.visibility) ordered.visibility = frontmatter.visibility;
   const yaml = YAML.stringify(ordered, { lineWidth: 0 }).trimEnd();
   const cleanBody = body.replace(/^\n+/, "").trimEnd();
   return `---\n${yaml}\n---\n\n${cleanBody}\n`;

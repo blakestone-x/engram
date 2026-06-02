@@ -234,6 +234,8 @@ where `t` is days since the memory was last reinforced (or created) and `importa
 
 **Dedup on write.** Identical title+body reinforces the existing memory instead of writing a duplicate, so append-heavy agents don't bloat the store.
 
+**Multi-agent and cross-platform.** Optional `scope` / `author` / `visibility` frontmatter namespaces a vault so many agents share one memory layer without contaminating each other — scoped recall defaults to isolate-with-a-global-fallback, and every MCP tool takes a `scope`. Because memory is plain markdown, `git` is your sync layer (branch per agent, merge for free) and `git log` is a built-in audit trail, while `engram export`/`import` give a portable, lock-in-free JSON-Lines bundle. The database-locked memory services can't hand you a `git clone` of your memory. See [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md).
+
 **Fast at scale.** A cached in-process store and a self-healing incremental index keep steady-state operations in the single-digit milliseconds even on a multi-thousand-memory vault (`getMemory` and `reinforce` are effectively O(1); a write reconciles one document, not the whole index).
 
 **Control panel.** A black/grey/red web UI over the engine's local HTTP API: overview with a live decay chart, a filterable memory table, a force-directed link graph, and an operations view that previews a decay or consolidation run before you apply it.
@@ -340,6 +342,7 @@ MIT. See [LICENSE](./LICENSE).
 ## Docs
 
 - [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) — the cognitive model and the decay math, with worked examples.
+- [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md) — namespacing, shared memory, git-as-sync, and portability for many agents and platforms.
 - [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — how Engram compares to the agent-memory field, with citations and design rationale.
 - [docs/HISTORY.md](docs/HISTORY.md) — how Engram came to be.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the module map for contributors.
