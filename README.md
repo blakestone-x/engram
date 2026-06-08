@@ -329,11 +329,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flo
 
 ## Status and roadmap
 
-v0.2, honest about its scope: single-user, local, no cloud sync, no auth, no telemetry, no network calls unless you explicitly configure an embedding provider. It is a tool one developer points at a folder and trusts.
+v0.3, honest about its scope: local-first, no cloud sync, no auth, no telemetry, no network calls unless you explicitly configure an embedding provider. It is a tool one developer points at a folder and trusts.
 
-Settled and working: the tiered model with tier-aware decay, the decay and reinforcement math, consolidation, supersession/bi-temporal validity, BM25F search and recall, content-hash dedup, the cached store and incremental index, the CLI, the MCP server, the control-panel API, and the privacy scrub. The embedding layer ships with an OpenAI provider stub and is off by default. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) explains the design choices against the wider field, with citations and a fair share of skepticism about what memory actually buys you.
+Settled and working: the tiered model with tier-aware decay, the decay and reinforcement math, consolidation, supersession/bi-temporal validity, BM25F search and recall (with optional hybrid embeddings), content-hash dedup, the cached store and incremental index, the CLI, the MCP server, the control-panel API, the privacy scrub, multi-agent namespacing (`scope`/`author`/`visibility`), and portable JSON-Lines export/import. The embedding layer ships with an OpenAI provider stub and is off by default. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) explains the design choices against the wider field, with citations and a fair share of skepticism about what memory actually buys you.
 
-Not yet: multi-user/namespaced vaults, sync, a hosted service, automatic `semantic → procedural` promotion (kept human-gated on purpose), and an optional WASM ANN backend for very large vaults.
+Not yet: hosted sync, a multi-tenant service, automatic `semantic → procedural` promotion (kept human-gated on purpose), and an optional WASM ANN backend for very large vaults.
 
 ## License
 
