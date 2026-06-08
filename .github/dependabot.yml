@@ -1,4 +1,8 @@
 version: 2
+# Routine major version bumps are intentionally NOT automated — there is no test
+# suite yet to gate runtime regressions, so majors are reviewed by hand.
+# Dependabot security updates (vulnerability fixes) remain enabled in repo settings
+# and are not subject to the major-version ignore below.
 updates:
   - package-ecosystem: "npm"
     directory: "/"
@@ -6,12 +10,16 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
-      dev-dependencies:
-        dependency-type: "development"
-        update-types:
-          - "minor"
-          - "patch"
+      npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
