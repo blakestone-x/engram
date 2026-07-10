@@ -21,10 +21,19 @@ what it keeps using stays sharp, what it stops using fades.
 
 ## Setup
 
-Point the server at a vault. Create one first with the CLI:
+The package isn't published to npm yet, so build it from a clone of the monorepo:
 
 ```bash
-npx engram init ~/agent-memory
+git clone https://github.com/blakestone-x/engram
+cd engram
+npm install
+npm run build:lib
+```
+
+Then create a vault for the agent's memory:
+
+```bash
+node packages/cli/dist/index.js init ~/agent-memory
 ```
 
 The server resolves its vault from, in order: a `--vault <dir>` flag, the
@@ -33,23 +42,33 @@ directory.
 
 ### Claude Desktop / Claude Code
 
-Add to your MCP config (`claude_desktop_config.json` or `.mcp.json`):
+Add to your MCP config (`claude_desktop_config.json` or `.mcp.json`), pointing
+at the built server inside your clone:
 
 ```json
 {
   "mcpServers": {
     "engram": {
-      "command": "npx",
-      "args": ["-y", "@engram/mcp", "--vault", "/absolute/path/to/agent-memory"]
+      "command": "node",
+      "args": [
+        "/absolute/path/to/engram/packages/mcp/dist/index.js",
+        "--vault", "/absolute/path/to/agent-memory"
+      ]
     }
   }
 }
 ```
 
+If you'd rather have a command on your PATH, run `npm i -g ./packages/mcp` from
+the repo root. npm links the install back to the clone (keep the clone in
+place), and the config becomes `"command": "engram-mcp"` with
+`"args": ["--vault", "/absolute/path/to/agent-memory"]`.
+
 ### Cursor
 
-Add an MCP server with command `npx -y @engram/mcp` and set `ENGRAM_VAULT` in the
-environment to your vault path.
+Add an MCP server with command `node`, the same two args as above, and your
+vault path. Or set `ENGRAM_VAULT` in the server's environment instead of
+passing `--vault`.
 
 ## A suggested agent contract
 
@@ -66,7 +85,8 @@ forgetting curve keeps it from drowning in stale notes.
 
 ## Maintenance
 
-Run the decay and consolidation passes on a schedule (cron, a CI job, or by hand):
+Run the decay and consolidation passes on a schedule (cron, a CI job, or by
+hand) with the Engram CLI (`npm i -g ./packages/cli` from the repo root):
 
 ```bash
 engram decay --apply        # deprecate memories that fell below retention threshold

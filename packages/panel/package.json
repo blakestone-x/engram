@@ -12,7 +12,7 @@
     "build": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "lint": "tsc --noEmit || true"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "react": "^18.3.1",

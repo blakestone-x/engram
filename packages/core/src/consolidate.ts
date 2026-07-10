@@ -11,7 +11,8 @@
  */
 
 import { elapsedDays, today } from "./dates.js";
-import { jaccard, tokenSet } from "./tokens.js";
+import { porterStem } from "./stemmer.js";
+import { jaccard, tokenSet, tokenize } from "./tokens.js";
 import { addMemory, appendRun, listMemories, updateMemory } from "./vault.js";
 import type {
   ConsolidationCluster,
@@ -24,6 +25,8 @@ import type {
 interface Candidate {
   memory: Memory;
   tokens: Set<string>;
+  /** Analyzed token → original word, so cluster labels stay readable when stemming is on. */
+  labels: Map<string, string>;
 }
 
 interface Cluster {
@@ -43,14 +46,16 @@ function eligible(vault: Vault, now: Date): Candidate[] {
         elapsedDays(fm.created, now) >= c.minAgeDays
       );
     })
-    .map((memory) => ({
-      memory,
-      tokens: tokenSet(
-        `${memory.frontmatter.title} ${memory.frontmatter.summary} ${memory.body}`,
-        80,
-        vault.config.search.stemming,
-      ),
-    }));
+    .map((memory) => {
+      const text = `${memory.frontmatter.title} ${memory.frontmatter.summary} ${memory.body}`;
+      const stem = vault.config.search.stemming;
+      const labels = new Map<string, string>();
+      for (const word of tokenize(text)) {
+        const key = stem && /[a-z]/.test(word) ? porterStem(word) : word;
+        if (!labels.has(key)) labels.set(key, word);
+      }
+      return { memory, tokens: tokenSet(text, 80, stem), labels };
+    });
 }
 
 /** Greedy single-pass clustering by Jaccard similarity. */
@@ -76,7 +81,7 @@ function sharedTokens(cl: Cluster): string[] {
   return [...counts.entries()]
     .filter(([, n]) => n >= 2)
     .sort((a, b) => b[1] - a[1])
-    .map(([t]) => t)
+    .map(([t]) => cl.members.find((m) => m.labels.has(t))?.labels.get(t) ?? t)
     .slice(0, 6);
 }
 

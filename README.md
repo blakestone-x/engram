@@ -1,190 +1,103 @@
 # Engram
 
 [![CI](https://github.com/blakestone-x/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/blakestone-x/engram/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-3fb950.svg)](https://nodejs.org)
 
-Local-first, markdown-native memory for AI agents. Memories are plain `.md` files with YAML frontmatter that decay on a forgetting curve, get reinforced when recalled, and consolidate from raw experience into durable knowledge.
+Most AI agents are amnesiacs. Every session starts from zero. You explain your setup, your conventions, the mistake you don't want repeated, and the next day you explain all of it again. For a one-off task that's fine. For an agent you work with every day, it's the ceiling. Engram gives an agent a long-term memory it keeps between sessions: plain markdown files on your disk, ranked at recall time by relevance blended with how well each memory has held up. Memories fade unless the agent keeps using them, and old episodes consolidate into durable knowledge.
 
-## What it is
+## Design
 
-An agent's memory lives in a folder you own. Each memory is one markdown file. A small TypeScript engine reads those files and adds the three things a folder of notes cannot do on its own:
+Memory is organized in four tiers:
 
-- A **shape** — four cognitive tiers (`working → episodic → semantic → procedural`).
-- A **metabolism** — memories lose retention over time unless they are referenced, and unreferenced low-value ones are auto-deprecated.
-- A **consolidation pass** — aged, reinforced episodic memories cluster by similarity and promote into semantic memories.
+- **`working`** is the live session: scratch notes that churn and fade in days.
+- **`episodic`** is the searchable log of what happened.
+- **`semantic`** is distilled truth lifted out of episodes.
+- **`procedural`** is the how-to steps that worked, committed deliberately and close to permanent.
 
-The markdown is the source of truth. The search index and any vectors are derived and rebuildable. Delete `.engram/` and you lose speed, not data.
+The rationale: human memory already solved this. Cognitive psychology separates these four kinds of memory because each holds a different kind of knowledge for a different length of time. Engram borrows the structure and the stability schedule. A memory's tier is a frontmatter field, and it scales the memory's half-life (defaults: working 0.4x, episodic 1x, semantic 2.5x, procedural 8x), so a scratch note is gone in days while an operating rule effectively never decays.
 
-Any MCP-capable agent — Claude Desktop, Claude Code, Cursor — can use a vault as live memory through the bundled [MCP server](#plug-it-into-an-agent-mcp): recall relevant memory before acting, write new memory after learning something, reinforce what worked. No vector database to run.
+## Consolidation and forgetting
 
-## Why
+The forgetting is the feature. A store that never forgets gets worse as it fills: a stale fact from three months ago ranks next to one written this morning, and recall quality erodes. Engram gives every memory a half-life instead.
 
-Most agents are built one of two ways. Either they start every session blank, or they dump everything into a vector store that grows without bound and never forgets — so a stale fact from three months ago ranks next to one written this morning, and retrieval quality erodes as the store fills.
+**Decay.** Retention follows the Ebbinghaus forgetting curve:
 
-Engram gives memory a structure and a half-life. Tiers separate scratch notes from operating rules. The decay curve means a memory you stop using fades on a predictable schedule; recalling it resets that clock and makes it more durable each time, the way spaced repetition works for people. Consolidation rolls up the episodic record into semantic summaries instead of keeping every raw observation forever.
+```
+retention = exp(-t / S)
+S = baseStability · (1 + strengthWeight · strength) · importanceFactor · tierFactor
+```
 
-And because the store is markdown, you can read it, `grep` it, diff it in git, and edit it by hand. There is no database to inspect through a client and no opaque binary blob.
+where `t` is days since the memory was last reinforced (or created). When an unpinned memory's retention falls below the deprecate threshold, the decay pass marks it `deprecated`. Deprecated memories drop out of recall but stay on disk, so forgetting means "stop surfacing this," not "destroy it." The full derivation with worked examples is in [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md).
+
+**Reinforcement.** When a recalled memory proves useful, reinforcing it resets its decay clock and raises its strength, which raises its future stability. This is spaced repetition: memory the agent keeps using becomes progressively harder to forget, and the rest fades on schedule.
+
+**Consolidation.** A background pass that runs like sleep. It gathers aged, reinforced episodic memories, clusters them by token overlap, and writes one durable semantic memory per cluster, with `informed_by` links back to every source. Sources are marked `consolidated`, not deleted, so the trail stays intact. Promotion past semantic (to a procedural rule) is human-invoked on purpose, via `engram promote`.
+
+Both passes are dry-run by default and take `--apply`. Run them on a cron and the store maintains itself.
 
 ## Quickstart
 
-From a clone of the monorepo:
+The packages aren't published to npm yet, so everything installs from a clone:
 
 ```bash
 git clone https://github.com/blakestone-x/engram
 cd engram
 npm install
-npm run build:lib        # builds @engram/core and the engram CLI
+npm run build:lib        # builds @engram/core, the engram CLI, and @engram/mcp
 ```
 
-Run the CLI directly from the built output:
+Run the CLI from the built output, or install the `engram` binary globally (npm links it back to the clone, so keep the clone in place):
 
 ```bash
 node packages/cli/dist/index.js init my-vault
-```
-
-Or install the `engram` binary globally and use it anywhere:
-
-```bash
+# or
 npm i -g ./packages/cli
 engram init my-vault
-cd my-vault
 ```
 
-The rest of this guide assumes the `engram` binary is on your path. Every command walks up from the current directory to find the nearest vault, so once you are inside `my-vault/` you can drop the `--dir` flag.
-
-### Initialize a vault
-
-```bash
-$ engram init my-vault
-Initialized Engram vault at /home/you/my-vault
-Next: engram status   ·   engram add -t "..." --tier working   ·   engram panel
-```
-
-This creates the tier directories, `.engram/config.json`, a seed "Welcome to Engram" memory, and the search index.
-
-### Add a memory
+Every command walks up from the current directory to find the nearest vault, so inside `my-vault/` no flags are needed. A short session:
 
 ```bash
 $ engram add -t "Customer prefers email over phone" --tier episodic \
     --type observation --importance 6 --tags contact,acme \
     -b "Confirmed on the 5/30 call. Phone goes to voicemail; email gets a same-day reply."
-Added 0c5f1e7a  episodic/2026-05-31-customer-prefers-email-over-phone-0c5f1e7a.md
-```
-
-Pass `-b -` to read the body from stdin. Title and tier are the only required fields; everything else is defaulted.
-
-### Search and recall
-
-`search` is plain BM25 over the markdown. `recall` is the agent-facing entry point — it blends the BM25 score with how well-retained and reinforced each memory is, so a durable, frequently-used memory outranks a fading one that happens to share more words.
-
-```bash
-$ engram search customer email
-1.84  Customer prefers email over phone [episodic] 0c5f1e7a
-     … Confirmed on the 5/30 call. Phone goes to voicemail; email gets a same-day reply. …
+Added 79c338447a1e  episodic/2026-07-10-customer-prefers-email-over-phone-79c338447a1e.md
 
 $ engram recall how to reach the customer
-2.07  Customer prefers email over phone [episodic] 73% ×0
+0.50  Customer prefers email over phone [episodic] 99% ×0
+
+$ engram reinforce 79c338447a1e
+Reinforced 79c338447a1e  Customer prefers email over phone  → strength 1
 ```
 
-Both accept `--json` for piping into an agent. `recall` reports each hit's retention and reinforcement count (`×0` here means it has never been reinforced).
-
-### Pack context for a prompt
-
-`context` is recall with a token budget. It returns a compact markdown block of the most useful memories, ready to drop straight into a prompt — bounded retrieval instead of stuffing the whole store into the window.
+`recall` reports each hit's retention and reinforcement count (`×0` means never reinforced). For prompt assembly, `context` is recall with a token budget; it returns a compact markdown block that drops straight into a prompt:
 
 ```bash
 $ engram context "how should we reach this customer" --budget 800
 # Recalled memory for: how should we reach this customer
 
-- [episodic] Customer prefers email over phone: Acme contact replies same-day to email; phone goes to voicemail. (id 0c5f1e7a)
-- [semantic] Account owner is the billing contact: Route account questions to the listed owner, not support. (id 9a2b1c3d)
+- [episodic·medium·99%] Customer prefers email over phone: Confirmed on the 5/30 call. Phone goes to voicemail; email gets a same-day reply. (id 79c338447a1e)
 
-  2 memories · ~120 tokens
+  1 memories · ~54 tokens
 ```
 
-It fills the block in `recall` order and stops before the budget is exceeded, so a larger vault costs the same per call. This is the primitive the MCP server's `engram_context` tool wraps.
-
-### Hybrid search (optional embeddings)
-
-Engram is lexical-only and fully offline by default. To add semantic recall, give it an embedding key — Engram reads `OPENAI_API_KEY` from a gitignored `.env` at the vault root (it is never committed or sent anywhere else):
-
-```bash
-echo "OPENAI_API_KEY=sk-..." > .env     # at the vault root; already gitignored
-engram vectors                          # embeds every memory, flips config to openai
-engram search "how do we reach the customer" --hybrid
-```
-
-`engram vectors` builds `.engram/vectors.json` and sets `embeddings.provider` in your config. `search --hybrid` then fuses BM25 with embedding cosine via Reciprocal Rank Fusion, recovering paraphrase matches that lexical search misses. With no key, none of this runs and nothing leaves the machine.
-
-### Reinforce what proved useful
-
-```bash
-$ engram reinforce 0c5f1e7a
-Reinforced 0c5f1e7a  Customer prefers email over phone  → strength 1
-```
-
-Reinforcing bumps `strength`, resets the decay clock to today, and logs the event. Each reinforcement raises the memory's stability, so it decays more slowly from then on.
-
-### Run the metabolism
+The maintenance passes preview before they touch anything. Against the populated example vault in [examples/starter-vault](examples/starter-vault):
 
 ```bash
 $ engram decay
-Evaluated 4 · forgettable 1 · dry-run (use --apply)
-  9%  An old scratch note [working] a1b2c3d4
+Evaluated 14 · forgettable 5 · dry-run (use --apply)
+  0%  Redis caching experiment notes [working] c9d0e1f2
+  ...
 
-$ engram decay --apply
-Evaluated 4 · forgettable 1 · deprecated 1
-  9%  An old scratch note [working] a1b2c3d4
-```
-
-`decay` is a dry run by default; `--apply` sets forgettable memories to `status: deprecated` and rewrites them. Consolidation works the same way:
-
-```bash
 $ engram consolidate
-Eligible 5 · clusters 1 · dry-run (use --apply)
-  cluster 1: 3 sources · dispatch, routing, overflow
-
-$ engram consolidate --apply
-Eligible 5 · clusters 1 · written 1
-  cluster 1: 3 sources · dispatch, routing, overflow
+Eligible 6 · clusters 1 · dry-run (use --apply)
+  cluster 1: 4 sources · checkout, timeout, gateway, client, circuit, breaker
 ```
 
-### Check status
+`engram status` summarizes the vault, `engram doctor` exits non-zero on integrity errors (usable as a CI gate on a vault in git), and `engram panel` serves a local web UI on `127.0.0.1`. The panel UI needs the full `npm run build`; the quickstart's `build:lib` skips it.
 
-```bash
-$ engram status
+## MCP server
 
-  Engram · /home/you/my-vault
-
-  working      1
-  episodic     5
-  semantic     2
-  procedural   0
-
-  total 8   avg retention 71%   decaying soon 1
-  status: active 7  consolidated 1  deprecated 0  disputed 0
-
-  recently reinforced
-    ×1 Customer prefers email over phone 2026-05-31
-```
-
-### Open the control panel
-
-```bash
-$ engram panel
-
-  Engram control panel
-  ▸ http://127.0.0.1:4319
-```
-
-The panel is a local web UI (black/grey/red, instrument-panel aesthetic) for browsing memories, watching the decay curve, inspecting the link graph, and running the decay/consolidate/reindex passes with a dry-run preview before applying. It binds to loopback only and has no auth. A screenshot:
-
-![Engram control panel](docs/panel.png)
-
-## Plug it into an agent (MCP)
-
-The `@engram/mcp` package is a [Model Context Protocol](https://modelcontextprotocol.io) server. Point it at a vault and any MCP client gets five tools:
+`@engram/mcp` is a stdio [Model Context Protocol](https://modelcontextprotocol.io) server. Point it at a vault and any MCP client (Claude Desktop, Claude Code, Cursor) gets five tools:
 
 | Tool | The agent calls it to |
 |------|-----------------------|
@@ -194,63 +107,39 @@ The `@engram/mcp` package is a [Model Context Protocol](https://modelcontextprot
 | `engram_reinforce` | mark a recalled memory as useful so it stays sharp |
 | `engram_stats` | read vault size, per-tier counts, and what is decaying soon |
 
-Create a vault, then add the server to your MCP config (Claude Desktop, Claude Code, Cursor, …):
+**Install.** Build from the clone as in the quickstart (`npm install && npm run build:lib`), create a vault, then point your MCP config (`claude_desktop_config.json`, or `.mcp.json` for Claude Code) at the built server:
 
 ```json
 {
   "mcpServers": {
     "engram": {
-      "command": "npx",
-      "args": ["-y", "@engram/mcp", "--vault", "/absolute/path/to/agent-memory"]
+      "command": "node",
+      "args": [
+        "/absolute/path/to/engram/packages/mcp/dist/index.js",
+        "--vault", "/absolute/path/to/agent-memory"
+      ]
     }
   }
 }
 ```
 
-Give the agent one instruction — *call `engram_context` before answering, `engram_remember` after learning something durable, `engram_reinforce` when a memory was right* — and it accumulates a long-term memory that decays what it stops using and consolidates what it keeps. See [packages/mcp/README.md](packages/mcp/README.md) for details.
+If you'd rather have a command on your PATH, `npm i -g ./packages/mcp` from the repo root installs an `engram-mcp` binary (linked to the clone), and the config becomes `"command": "engram-mcp"` with `"args": ["--vault", "..."]`.
 
-## Key features
+The server resolves its vault from `--vault`, then the `ENGRAM_VAULT` environment variable, then the nearest vault above the working directory. Logs go to stderr; stdout carries only the protocol.
 
-**Markdown is the source of truth.** Every memory is a `.md` file you can read and edit. The BM25 index in `.engram/index.json` and the optional vector index are both derived — `engram reindex` rebuilds them from the markdown alone.
+Then give the agent one instruction: call `engram_context` before acting, `engram_remember` after learning something durable, `engram_reinforce` when a recalled memory was right. That loop is the whole idea. See [packages/mcp/README.md](packages/mcp/README.md) for details.
 
-**Four cognitive tiers.** `working` for scratch, `episodic` for time-stamped observations, `semantic` for durable facts and knowledge, `procedural` for operating rules. The tier is set in frontmatter, not by which folder a file sits in (`engram doctor` warns when those disagree). Tiers are fixed; types, tags, and domains are yours to configure.
+## Architecture notes
 
-**Ebbinghaus decay.** Retention follows the forgetting curve:
+Four packages in an npm workspace: `@engram/core` (the engine), `engram` (the CLI), `@engram/mcp` (the MCP server), `@engram/panel` (a Vite + React control panel served by the engine's `node:http` API). The engine is pure TypeScript with no native dependencies; it runs on a clean machine with Node 20 or later. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the module map.
 
-```
-retention = exp(-t / S)
-S = baseStability · (1 + strengthWeight · strength) · importanceFactor
-```
+**Local-first.** Nothing leaves the machine on the default path. There are no network calls unless you explicitly configure an embedding provider, and the panel binds to `127.0.0.1` only.
 
-where `t` is days since the memory was last reinforced (or created) and `importanceFactor(i) = 1 + importanceWeight · (i − 5)`, floored at `0.25`. Stability is also scaled per tier (`tierStability`, default working 0.4 / episodic 1 / semantic 2.5 / procedural 8), so `working` scratch fades in days while `procedural` rules are effectively permanent. With the defaults (`baseStability` 14 days, `strengthWeight` 0.8, `importanceWeight` 0.15), a neutral episodic memory loses about 63% of its retention in two weeks if you never touch it. See [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) for the full derivation.
-
-**Reinforcement is spaced repetition.** Each recall you confirm useful can be reinforced; that resets the clock to today and increments `strength`, which raises future stability. Memories you keep using become progressively harder to forget. Memories you ignore fall below the deprecate threshold and get marked `deprecated`.
-
-**Consolidation, episodic to semantic.** The offline pass gathers aged, reinforced episodic memories, clusters them by token overlap, and synthesizes one durable semantic memory per cluster — with `informed_by` links back to every source. The sources are kept and marked `consolidated`, so the trail remains. Promotion past semantic (to a procedural operating rule) is human-invoked only, via `engram promote`.
-
-**Supersession instead of deletion.** When a fact changes, a new memory with a `supersedes` link retires the old one — marking it `deprecated` and stamping `superseded_by`, never deleting it. Superseded and expired (`valid_until`) memories drop out of recall, but the history stays on disk and is queryable with `recall --as-of <date>`. This is the lightweight, markdown-native version of a bi-temporal knowledge graph.
-
-**BM25F search, optional embeddings.** Retrieval is a pure-TypeScript inverted index with **BM25F** field weighting — title, summary, and body each get their own length normalization and a combined document frequency (default weights title 5 / summary 2 / body 1), with optional Porter stemming so word variants match. Fully offline, no service to run. If you configure an embedding provider, `buildVectors` populates a vector index and search fuses lexical and semantic ranks with Reciprocal Rank Fusion. With no provider configured, nothing leaves the machine.
-
-**Dedup on write.** Identical title+body reinforces the existing memory instead of writing a duplicate, so append-heavy agents don't bloat the store.
-
-**Multi-agent and cross-platform.** Optional `scope` / `author` / `visibility` frontmatter namespaces a vault so many agents share one memory layer without contaminating each other — scoped recall defaults to isolate-with-a-global-fallback, and every MCP tool takes a `scope`. Because memory is plain markdown, `git` is your sync layer (branch per agent, merge for free) and `git log` is a built-in audit trail, while `engram export`/`import` give a portable, lock-in-free JSON-Lines bundle. The database-locked memory services can't hand you a `git clone` of your memory. See [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md).
-
-**Fast at scale.** A cached in-process store and a self-healing incremental index keep steady-state operations in the single-digit milliseconds even on a multi-thousand-memory vault (`getMemory` and `reinforce` are effectively O(1); a write reconciles one document, not the whole index).
-
-**Control panel.** A black/grey/red web UI over the engine's local HTTP API: overview with a live decay chart, a filterable memory table, a force-directed link graph, and an operations view that previews a decay or consolidation run before you apply it.
-
-**Privacy scrub.** Before a memory is written, its body is run through a redaction pass that replaces matches of the vault's `redactPatterns` with `[REDACTED]`. The defaults catch AWS keys, OpenAI-style secret keys, GitHub PATs, and PEM private-key headers; extend them per vault.
-
-**Zero native dependencies in the engine.** `@engram/core` is pure TypeScript — no `better-sqlite3`, no native addons. It installs and runs on a clean machine with only Node ≥ 20. The HTTP server uses `node:http`.
-
-## Memory file format
-
-A memory is one markdown file. The frontmatter is serialized in a fixed key order:
+**Markdown-native.** Each memory is one `.md` file with YAML frontmatter in a fixed key order:
 
 ```markdown
 ---
-id: 0c5f1e7a
+id: 79c338447a1e
 title: Customer prefers email over phone
 tier: episodic
 type: observation
@@ -258,82 +147,37 @@ status: active
 confidence: medium
 importance: 6
 strength: 1
-created: 2026-05-31
-last_reviewed: 2026-05-31
-last_reinforced: 2026-05-31
+created: 2026-07-10
+last_reviewed: 2026-07-10
+last_reinforced: 2026-07-10
 tags:
   - contact
   - acme
-links:
-  - to: 9a2b1c3d
-    rel: related
-summary: Acme contact replies same-day to email; phone goes to voicemail.
+summary: Email gets a same-day reply; phone goes to voicemail.
 ---
 
 Confirmed on the 5/30 call. Phone goes to voicemail; email gets a same-day reply.
 ```
 
-Only `title` and `tier` are required on write — the rest are defaulted. The `last_reinforced` date is the decay clock; reinforcing resets it. Hand-edit any field and the engine will load it; a missing field falls back to its default rather than erroring.
+Only `title` and `tier` are required on write; the rest is defaulted. You can read, `grep`, hand-edit, and git-diff your agent's memory. The search index in `.engram/index.json` and any vectors are derived and rebuildable (`engram reindex`), so deleting `.engram/` costs speed, not data.
 
-## How it fits an agent loop
+**Retrieval.** A pure-TypeScript inverted index with BM25F field weighting (title, summary, and body get separate weights and length normalization, with optional Porter stemming). `recall` blends the lexical score with each memory's current retention and strength, so a durable, frequently used memory outranks a fading one that happens to share more words. `context` packs recall results into a token budget. If you configure an embedding provider (`engram vectors`, reads `OPENAI_API_KEY` from a `.env` at the vault root; keep that file out of git), search fuses lexical and vector ranks with Reciprocal Rank Fusion; with no provider, none of that code runs.
 
-Engram is a CLI and a library, so it slots into whatever orchestration you already have. A typical loop:
+**Write-time gating.** Before a memory is written, its body passes through a redaction filter: matches of the vault's `redactPatterns` become `[REDACTED]`. The defaults catch AWS keys, OpenAI-style secret keys, GitHub tokens, and PEM private-key headers. Writes also dedup by content hash: adding a memory with an identical title and body reinforces the existing one instead of storing a duplicate.
 
-1. **Recall before acting.** Pull the most useful memories for the current task. `engram context "<task context>" --budget 1500` returns a prompt-ready block; `engram recall "<task context>" --json` returns ranked hits weighted by retention and reinforcement. Through MCP this is the `engram_context` tool.
-2. **Write observations as you go.** New facts and events go to `working` or `episodic`: `engram add -t "..." --tier episodic --type observation -b -`.
-3. **Reinforce what paid off.** When a recalled memory turned out to be the right one, `engram reinforce <id>` so it stays durable.
-4. **Schedule the metabolism.** Run the offline passes on a cron — `engram decay --apply` and `engram consolidate --apply` nightly, say — so the store forgets dead weight and rolls episodic experience up into semantic knowledge without you in the loop.
+Beyond the basics: supersession links retire a changed fact without deleting it (`recall --as-of <date>` answers "what was known then"), and optional `scope`/`author`/`visibility` frontmatter lets multiple agents share one vault without contaminating each other ([docs/MULTI-AGENT.md](docs/MULTI-AGENT.md)). The control panel gives you a live decay chart, a link graph, and dry-run previews of the maintenance passes:
 
-`engram doctor` exits non-zero on integrity errors (broken links, duplicate ids, out-of-range importance), so you can run it as a CI gate on a vault checked into git.
+![Engram control panel](docs/panel.png)
 
-## Architecture at a glance
+## Provenance
 
-Four packages in an npm workspace:
-
-- **`@engram/core`** — the engine. A cached vault store, frontmatter, the BM25F index, decay, consolidation, recall, context packing, the optional embedding layer, and a `node:http` API. No native dependencies.
-- **`engram`** — the CLI. A thin, scriptable surface over core; plain-text output by default, `--json` where it helps.
-- **`@engram/mcp`** — the Model Context Protocol server. Exposes the vault as five memory tools to any MCP client.
-- **`@engram/panel`** — the Vite + React control panel, built to a static bundle that core can serve.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flow.
-
-## Config
-
-`.engram/config.json` holds the decay and consolidation tunables. The defaults:
-
-```json
-{
-  "types": ["note", "fact", "decision", "error", "reference", "observation"],
-  "decay": {
-    "baseStability": 14,
-    "strengthWeight": 0.8,
-    "importanceWeight": 0.15,
-    "deprecateThreshold": 0.15,
-    "pinThreshold": 8,
-    "tierStability": { "working": 0.4, "episodic": 1, "semantic": 2.5, "procedural": 8 }
-  },
-  "consolidation": {
-    "minStrength": 2,
-    "minAgeDays": 14,
-    "clusterThreshold": 0.18,
-    "minClusterSize": 3,
-    "maxPerRun": 3
-  },
-  "search": { "k1": 1.5, "b": 0.75, "fieldWeights": { "title": 5, "summary": 2, "body": 1 }, "stemming": true },
-  "embeddings": { "provider": null },
-  "redactPatterns": ["AKIA[0-9A-Z]{16}", "sk-[A-Za-z0-9]{20,}", "ghp_[A-Za-z0-9]{36}", "-----BEGIN [A-Z ]*PRIVATE KEY-----"]
-}
-```
-
-`pinThreshold` 8 means any memory with `importance >= 8` is reported but never auto-deprecated. `deprecateThreshold` 0.15 is the retention floor below which an unpinned active memory becomes forgettable. `tierStability` scales each tier's half-life. `search.fieldWeights` set the BM25F title/summary/body weighting and `search.stemming` toggles Porter stemming. Consolidation only considers episodic memories that are active, have `strength >= 2`, and are at least 14 days old. Missing keys merge over these defaults, so a partial config is fine.
+Engram is extracted from a production memory system running inside a national commercial field-service operation, where a fleet of coding agents uses it daily to carry knowledge across sessions. What carried over is the mechanism: the tiers, the decay math, reinforcement, consolidation, and the markdown-as-source-of-truth decision. The domain content, schemas, and integrations stayed behind. [docs/HISTORY.md](docs/HISTORY.md) tells the longer story, and [docs/PRIOR-ART.md](docs/PRIOR-ART.md) places the design against the wider agent-memory field.
 
 ## Status and roadmap
 
-v0.3, honest about its scope: local-first, no cloud sync, no auth, no telemetry, no network calls unless you explicitly configure an embedding provider. It is a tool one developer points at a folder and trusts.
+v0.3. Local-first, single-user, no cloud sync, no auth, no telemetry. Not yet published to npm, so install from a clone as shown above. The engine, CLI, MCP server, and panel all build and run from a fresh checkout; 42 tests cover the decay math, consolidation, search, frontmatter handling, multi-agent scoping, and integrity checks.
 
-Settled and working: the tiered model with tier-aware decay, the decay and reinforcement math, consolidation, supersession/bi-temporal validity, BM25F search and recall (with optional hybrid embeddings), content-hash dedup, the cached store and incremental index, the CLI, the MCP server, the control-panel API, the privacy scrub, multi-agent namespacing (`scope`/`author`/`visibility`), and portable JSON-Lines export/import. The embedding layer ships with an OpenAI provider stub and is off by default. [docs/PRIOR-ART.md](docs/PRIOR-ART.md) explains the design choices against the wider field, with citations and a fair share of skepticism about what memory actually buys you.
-
-Not yet: hosted sync, a multi-tenant service, automatic `semantic → procedural` promotion (kept human-gated on purpose), and an optional WASM ANN backend for very large vaults.
+Working today: the tiered model with tier-aware decay, reinforcement, consolidation, supersession with as-of recall, BM25F search with optional hybrid embeddings, content-hash dedup, write-time redaction, the CLI, the MCP server, the control panel, multi-agent namespacing, and JSON-Lines export/import. Not built: hosted sync, a multi-tenant service, and automatic semantic-to-procedural promotion, which stays human-gated on purpose.
 
 ## License
 
@@ -341,8 +185,8 @@ MIT. See [LICENSE](./LICENSE).
 
 ## Docs
 
-- [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md) — the cognitive model and the decay math, with worked examples.
-- [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md) — namespacing, shared memory, git-as-sync, and portability for many agents and platforms.
-- [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — how Engram compares to the agent-memory field, with citations and design rationale.
-- [docs/HISTORY.md](docs/HISTORY.md) — how Engram came to be.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the module map for contributors.
+- [docs/MEMORY-MODEL.md](docs/MEMORY-MODEL.md): the cognitive model and the decay math, with worked examples.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the module map for contributors.
+- [docs/MULTI-AGENT.md](docs/MULTI-AGENT.md): namespacing, shared vaults, and git as the sync layer.
+- [docs/PRIOR-ART.md](docs/PRIOR-ART.md): design rationale against the agent-memory field, with citations.
+- [docs/HISTORY.md](docs/HISTORY.md): how Engram came to be.

@@ -8,7 +8,7 @@
 
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
 import pc from "picocolors";
 import Table from "cli-table3";
@@ -275,7 +275,7 @@ program
   .action(async (opts) => {
     const vault = resolveVault(opts.dir);
     if (!process.env.OPENAI_API_KEY) {
-      console.error(pc.red("OPENAI_API_KEY is not set. Put it in a .env at the vault root (gitignored), e.g. OPENAI_API_KEY=sk-..."));
+      console.error(pc.red("OPENAI_API_KEY is not set. Put it in a .env at the vault root (keep it out of git), e.g. OPENAI_API_KEY=sk-..."));
       process.exit(1);
     }
     if (vault.config.embeddings.provider !== "openai") {
@@ -427,7 +427,8 @@ function resolvePanelDist(): string | undefined {
   try {
     const require = createRequire(import.meta.url);
     const pkg = require.resolve("@engram/panel/package.json");
-    return join(dirname(pkg), "dist");
+    const dist = join(dirname(pkg), "dist");
+    return existsSync(join(dist, "index.html")) ? dist : undefined;
   } catch {
     return undefined;
   }

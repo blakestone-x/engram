@@ -23,7 +23,7 @@
     "build": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc -b --noEmit || true"
+    "lint": "tsc -b --noEmit"
   },
   "dependencies": {
     "gray-matter": "^4.0.3",

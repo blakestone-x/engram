@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc -b",
     "start": "node ./dist/index.js",
-    "lint": "tsc -b --noEmit || true"
+    "lint": "tsc -b --noEmit"
   },
   "dependencies": {
     "@engram/core": "0.3.0",

@@ -19,7 +19,7 @@ Design rules:
 - **Markdown is the source of truth.** Everything else (index, vectors) is derived and
   rebuildable from the `.md` files alone. Deleting `.engram/` must lose nothing but speed.
 - **Zero native dependencies in `@engram/core`.** Pure TypeScript. No better-sqlite3, no
-  native addons. `npx engram` must work on a clean machine with only Node ≥ 20.
+  native addons. The CLI must build and run on a clean machine with only Node ≥ 20.
 - **Config over hardcode.** No domain-specific enums baked in. Tiers are fixed (they are
   the cognitive model); types/tags/domains are user config.
 - **Privacy by default.** A scrub pass strips obvious secrets before write; nothing leaves
