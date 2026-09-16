@@ -32,6 +32,9 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Audit dependencies
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == 22
+        run: npm audit --audit-level=moderate
       - name: Build all four packages
         run: npm run build
       - name: Lint
@@ -43,8 +46,8 @@ jobs:
       - name: Smoke
         run: npm run smoke
 
-  dependency-candidate:
-    name: Dependency refresh candidate
+  panel-review:
+    name: Panel browser review
     if: github.head_ref == 'docs/reviewer-readiness-2026-09-16'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -52,26 +55,59 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
-      - name: Materialize the existing workspace dependency graph
-        run: npm ci --ignore-scripts
-      - name: Resolve supported dependency updates without lifecycle scripts
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+      - name: Install isolated browser tooling and inspect the panel
+        shell: bash
         run: |
-          npm pkg set 'devDependencies.vitest=^4.1.11'
-          npm pkg set 'devDependencies.vitest=^4.1.11' --workspace @engram/core
-          npm install --package-lock-only --ignore-scripts
-          npm update --package-lock-only --ignore-scripts
-      - name: Report candidate lockfile and manifests
-        if: always()
-        run: |
-          node -e "const fs=require('node:fs'); for(const p of ['package-lock.json','package.json','packages/core/package.json']) console.log('ENGRAM_CANDIDATE='+JSON.stringify({path:p,content:fs.readFileSync(p,'utf8')}))"
-      - name: Audit candidate
-        run: npm audit --audit-level=moderate
-      - name: Install and verify candidate
-        run: |
-          npm ci
-          npm run build
-          npm run lint
-          npm run typecheck
-          npm test
-          npm run smoke
+          ui_dir="$RUNNER_TEMP/engram-ui"
+          mkdir -p "$ui_dir"
+          npm install --prefix "$ui_dir" --no-package-lock --no-save playwright@1.63.0
+          "$ui_dir/node_modules/.bin/playwright" install --with-deps chromium
+          PLAYWRIGHT_ENTRY="$ui_dir/node_modules/playwright/index.mjs" node --input-type=module <<'JS'
+          import assert from "node:assert/strict";
+          import { cpSync, mkdtempSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { dirname, join, resolve } from "node:path";
+          import { pathToFileURL } from "node:url";
+          import { createServer, openVault } from "@engram/core";
+          const { chromium } = await import(pathToFileURL(process.env.PLAYWRIGHT_ENTRY).href);
+          const parent = resolve(tmpdir());
+          const temp = mkdtempSync(join(parent, "engram-panel-review-"));
+          const vault = join(temp, "vault");
+          cpSync("examples/starter-vault", vault, { recursive: true });
+          const server = createServer(openVault(vault), { staticDir: resolve("packages/panel/dist") });
+          let browser;
+          try {
+            await new Promise((done, fail) => { server.once("error", fail); server.listen(0, "127.0.0.1", done); });
+            const address = server.address();
+            assert.ok(address && typeof address !== "string");
+            browser = await chromium.launch();
+            const page = await browser.newPage({ viewport: { width: 1440, height: 760 }, deviceScaleFactor: 1 });
+            page.setDefaultTimeout(15000);
+            const errors = [];
+            page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+            page.on("pageerror", error => errors.push(error.message));
+            await page.goto("http://127.0.0.1:" + address.port, { waitUntil: "networkidle" });
+            await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
+            await page.getByText("forgetting curve · 14 memories", { exact: true }).waitFor();
+            assert.equal(await page.locator(".ver").innerText(), "v0.3.0");
+            for (const view of ["Memories", "Graph", "Operations"]) {
+              await page.locator(".nav-item").filter({ hasText: view }).click();
+              await page.getByRole("heading", { name: view, exact: true }).waitFor();
+              if (view === "Memories") await page.waitForFunction(() => document.querySelectorAll(".mrow:not(.head)").length === 14);
+              if (view === "Graph") await page.waitForFunction(() => document.querySelectorAll(".graph-node").length === 14);
+            }
+            await page.locator(".nav-item").filter({ hasText: "Overview" }).click();
+            await page.getByText("forgetting curve · 14 memories", { exact: true }).waitFor();
+            assert.deepEqual(errors, []);
+            console.log("Panel browser review passed: version 0.3.0, all four views, 14 memories and graph nodes, no console or page errors.");
+            console.log("ENGRAM_PANEL_PNG=" + (await page.screenshot({ fullPage: true })).toString("base64"));
+          } finally {
+            if (browser) await browser.close();
+            if (server.listening) { server.closeAllConnections(); await new Promise((done, fail) => server.close(error => error ? fail(error) : done())); }
+            assert.equal(dirname(resolve(temp)), parent);
+            rmSync(temp, { recursive: true, force: true });
+          }
+          JS

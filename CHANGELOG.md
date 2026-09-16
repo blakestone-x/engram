@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Updated Vitest to the patched 4.1 line and refreshed compatible dependencies. Compatible transitive updates address the reported dependency advisories.
+- The panel reads its displayed version from package metadata.
 - Reworked the README around a runnable starter vault, MCP setup, and reproducible verification commands.
 - Aligned contributor and architecture documentation with all four workspaces.
 - Corrected storage, scope, temporal-retrieval, token-budget, and procedural-promotion claims to match the implementation. Configuration and operation history are explicitly preserved.
