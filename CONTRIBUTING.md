@@ -7,12 +7,15 @@ Thanks for looking at the internals. Engram is a small engine with a deliberatel
 ```bash
 git clone https://github.com/blakestone-x/engram
 cd engram
-npm install        # installs all workspaces
-npm run build      # builds core, cli, and panel
+npm ci             # installs the committed dependency versions
+npm run build      # builds core, cli, mcp, and panel
+npm run lint
+npm run typecheck
 npm test           # runs the @engram/core vitest suite
+npm run smoke      # verifies CLI, MCP, panel, and starter-vault workflows
 ```
 
-`npm install` at the root installs every workspace (`@engram/core`, `engram`, `@engram/panel`) — there is no separate install step per package.
+`npm ci` at the root installs every workspace (`@engram/core`, `engram`, `@engram/mcp`, `@engram/panel`) — there is no separate install step per package.
 
 ## Build scripts
 
@@ -20,11 +23,12 @@ Run these from the repo root:
 
 | Script | What it does |
 |---|---|
-| `npm run build` | Build all three packages (core → cli → panel). |
-| `npm run build:lib` | Build just `@engram/core` and the `engram` CLI — what you want when you are not touching the panel. |
+| `npm run build` | Build all four packages (core → cli → mcp → panel). |
+| `npm run build:lib` | Build core, CLI, and MCP without the panel. |
 | `npm test` | Run the core test suite (`vitest run`). |
-| `npm run typecheck` | Type-check core and cli with `tsc -b`. |
+| `npm run typecheck` | Type-check core, CLI, MCP, panel, and smoke-check JavaScript. |
 | `npm run lint` | Run each workspace's lint (type-check based). |
+| `npm run smoke` | Exercise built CLI, MCP stdio, panel HTTP, and the fixture vault using temporary data; run a full build first. |
 | `npm run clean` | Remove all `dist/` output and build info. |
 
 After `npm run build:lib` you can drive the CLI from its built output without a global install:
@@ -47,6 +51,7 @@ engram/
   packages/
     core/   @engram/core  the engine (see docs/ARCHITECTURE.md for the module map)
     cli/    engram         the CLI
+    mcp/    @engram/mcp   the stdio Model Context Protocol server
     panel/  @engram/panel  the Vite + React control panel
 ```
 
@@ -59,7 +64,7 @@ engram/
 - **No native dependencies in `@engram/core`.** This is a hard rule. The engine must install and run on a clean machine with only Node ≥ 20. No `better-sqlite3`, no native addons. The HTTP server uses `node:http`; the index is plain JSON. If a change wants a native dep, it does not belong in core.
 - **Keep core dependency-light.** The current budget is `gray-matter`, `yaml`, and `zod`. Adding to it needs a good reason.
 - **Pure where it can be pure.** Decay and the tokenizer are pure functions given a clock. Keep them that way — it is what makes them testable against closed-form expectations.
-- **Markdown stays canonical.** Anything you add to `.engram/` must be derivable from the `.md` files. Deleting `.engram/` must never lose data.
+- **Markdown stays canonical for memories.** Search indexes and vectors are derived. Preserve `.engram/config.json` (user settings) and `.engram/runs/` (operation history); they cannot be rebuilt from memory files.
 
 ## Tests
 
@@ -84,8 +89,8 @@ Vite serves the UI with hot reload and proxies `/api` to the core server on `127
 Before opening a pull request:
 
 - [ ] `npm run build` succeeds.
-- [ ] `npm test` passes.
-- [ ] `npm run typecheck` is clean.
+- [ ] `npm run lint`, `npm run typecheck`, and `npm test` pass.
+- [ ] `npm run smoke` passes after a full build.
 - [ ] New engine behavior has a test, and the math has a closed-form or fixture assertion.
 - [ ] `@engram/core` gained no native dependency.
 - [ ] If engine behavior changed, `SPEC.md` was updated to match.

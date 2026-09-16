@@ -3,6 +3,7 @@
  * Operations) and a loopback health indicator. Talks only to the core API.
  */
 import { useCallback, useEffect, useState } from "react";
+import packageJson from "../package.json";
 import { api } from "./api";
 import { Overview } from "./views/Overview";
 import { Memories } from "./views/Memories";
@@ -48,7 +49,7 @@ export default function App() {
           <span className="mark">
             engram<span className="dot">.</span>
           </span>
-          <span className="ver">v0.1.0</span>
+          <span className="ver">v{packageJson.version}</span>
         </div>
 
         {NAV.map((n) => (

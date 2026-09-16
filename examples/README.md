@@ -1,45 +1,45 @@
-# Engram — starter vault example
+# Starter vault
 
-A populated example vault so you can see decay and consolidation working on real data.
-Theme: engineering and ops memory for a small SaaS team.
+Fourteen fictional engineering and operations memories demonstrate retrieval, decay, and consolidation without an API key.
 
-## Quick start
+## Run it
+
+First install and build from the repository root:
 
 ```bash
-cd examples/starter-vault
-
-# Build the search index
-node ../../packages/cli/dist/index.js reindex
-
-# Verify integrity (should exit 0)
-node ../../packages/cli/dist/index.js doctor
-
-# Dashboard overview
-node ../../packages/cli/dist/index.js status
-
-# See which memories are fading (dry run — no changes)
-node ../../packages/cli/dist/index.js decay
-
-# See which episodic clusters are ready to consolidate (dry run)
-node ../../packages/cli/dist/index.js consolidate
-
-# Launch the web panel
-node ../../packages/cli/dist/index.js panel
+npm ci
+npm run build
 ```
 
-## What is in the vault
+Then, still at the repository root:
 
-| Tier | Count | What |
-|------|-------|------|
-| working | 3 | Scratch notes — one is 70+ days old with low importance (decay flags it) |
-| episodic | 6 | Four checkout-timeout incidents share overlapping vocabulary (consolidate clusters them); two unrelated entries |
-| semantic | 3 | Durable engineering rules — DB indexes, API design, error handling |
-| procedural | 2 | Operating procedures — deploy steps, incident runbook |
+```bash
+node packages/cli/dist/index.js reindex --dir examples/starter-vault
+node packages/cli/dist/index.js doctor --dir examples/starter-vault
+node packages/cli/dist/index.js status --dir examples/starter-vault
+node packages/cli/dist/index.js recall "checkout timeout" --dir examples/starter-vault
+node packages/cli/dist/index.js context "checkout timeout" --budget 800 --dir examples/starter-vault
+node packages/cli/dist/index.js consolidate --dir examples/starter-vault
+node packages/cli/dist/index.js decay --dir examples/starter-vault
+node packages/cli/dist/index.js panel --dir examples/starter-vault
+```
 
-## Expected output
+Open http://127.0.0.1:4319 for the panel; stop it with Ctrl+C. The panel needs the full build, not just `build:lib`.
 
-- `decay`: at least 1 memory flagged as forgettable (the old Redis scratch note).
-- `consolidate`: at least 1 cluster found (the four checkout-timeout episodic entries).
-- `doctor`: exits 0, no errors.
+## What to expect
 
-Neither `decay` nor `consolidate` modifies files without `--apply`.
+| Tier | Count | Contents |
+|---|---|---|
+| working | 3 | Task notes, including an old Redis experiment |
+| episodic | 6 | Four related checkout-timeout incidents and two unrelated entries |
+| semantic | 3 | Database, API, and error-handling guidance |
+| procedural | 2 | Deployment and incident-response procedures |
+
+- `doctor` checks 14 memories and exits 0 when there are no integrity errors.
+- `recall` finds the checkout-timeout notes.
+- `consolidate` finds at least one eligible cluster.
+- `decay` flags the old Redis note. Dates are fixed, so retention percentages and the number of forgettable memories change over time.
+
+Consolidation and decay preview changes unless you pass `--apply`. Reindex writes a derived index; panel actions can modify the vault. Copy `examples/starter-vault` outside the checkout before trying mutations. Consolidate before applying decay if you want the related active episodes to remain eligible.
+
+Run `npm run smoke` after a full build to check the starter vault and the CLI, MCP, and panel paths against temporary copies.

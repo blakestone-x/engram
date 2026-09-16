@@ -1,6 +1,6 @@
 version: 2
-# Routine major version bumps are intentionally NOT automated — there is no test
-# suite yet to gate runtime regressions, so majors are reviewed by hand.
+# Routine major version bumps are reviewed deliberately alongside migration notes.
+# Minor and patch updates are grouped and verified by CI.
 # Dependabot security updates (vulnerability fixes) remain enabled in repo settings
 # and are not subject to the major-version ignore below.
 updates:

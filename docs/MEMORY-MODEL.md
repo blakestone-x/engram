@@ -6,14 +6,16 @@ This document explains the cognitive model Engram implements and derives the mat
 
 Engram fixes four tiers, ordered from most volatile to most durable. A memory's tier is set in its frontmatter, not by which directory it happens to sit in.
 
-| Tier | What belongs in it | Typical lifespan |
+| Tier | What belongs in it | Default time to deprecation threshold* |
 |---|---|---|
-| `working` | Scratch state for the current task — intermediate results, a plan you are executing, a value you will discard. | Minutes to a day. |
-| `episodic` | Time-stamped observations and events. "On 5/30 the customer said X." The raw record of what happened. | Days to weeks unless reinforced. |
-| `semantic` | Durable facts and knowledge distilled from experience. "This customer replies same-day to email." Stable, broadly useful. | Long-lived. |
-| `procedural` | Operating rules — the things an agent should always do or never do. "Never dispatch without confirming the address." | Permanent, human-curated. |
+| `working` | Scratch state for the current task — intermediate results, a plan you are executing, a value you will discard. | About 10.6 days. |
+| `episodic` | Time-stamped observations and events. "On 5/30 the customer said X." The raw record of what happened. | About 26.6 days. |
+| `semantic` | Durable facts and knowledge distilled from experience. "This customer replies same-day to email." Stable, broadly useful. | About 66.4 days. |
+| `procedural` | Operating rules — the things an agent should always do or never do. "Never dispatch without confirming the address." | About 212.5 days. |
 
-The tiers map onto how the engine treats a memory. Working and episodic memories are expected to churn; the decay curve does most of its visible work on them. Semantic memories are the consolidation target. Procedural memories are operating rules and are only ever created by a human via `engram promote` — there is no automatic path into the procedural tier.
+*For importance 5, strength 0, and the default 0.15 threshold. Reinforcement and importance change these values; importance 8+ prevents automatic deprecation. Crossing the threshold does not change status until decay is applied.
+
+The tiers map onto how the engine treats a memory. Working and episodic memories are expected to churn; the decay curve does most of its visible work on them. Semantic memories are the consolidation target. Consolidation does not promote into the procedural tier. `engram promote` is an explicit operation; direct CLI, library, and MCP writes can also create procedural memories, so human review is a caller policy rather than an enforced permission boundary.
 
 `engram doctor` warns when a file lives in one tier directory but declares a different tier in frontmatter, because that is almost always an editing mistake.
 
@@ -33,9 +35,9 @@ retention = exp(-t / S)
 
 ### Stability
 
-`S` is the stability, in days. It is the time constant of the exponential: larger `S` means slower decay. Three things set it.
+`S` is the stability, in days. It is the time constant of the exponential: larger `S` means slower decay. The half-life is `S × ln(2)`, not `S`. Base stability, reinforcement, importance, and tier set it.
 
-- **`baseStability`** (default **14**) is the stability of a neutral memory — importance 5, strength 0. At `t = baseStability`, retention is `exp(-1) ≈ 0.368`, so a neutral, never-reinforced memory has lost about 63% of its retention after two weeks.
+- **`baseStability`** (default **14**) is the stability of a neutral episodic memory — importance 5, strength 0. At `t = baseStability`, retention is `exp(-1) ≈ 0.368`, so a neutral, never-reinforced memory has lost about 63% of its retention after two weeks.
 - **`strengthWeight`** (default **0.8**) scales how much each reinforcement extends stability. `strength` is the count of times the memory has been reinforced.
 - **importance** feeds `importanceFactor`, below.
 
@@ -54,7 +56,7 @@ The tiers are a half-life ladder. `tierFactor(tier)` reads `decay.tierStability`
 - A neutral **working** memory has `S = 14 · 0.4 = 5.6` days — it is nearly gone (retention ≈ 0.005) after a month untouched. Scratch should evaporate.
 - A neutral **episodic** memory uses base stability (factor 1).
 - A neutral **semantic** memory has `S = 35` days, so durable knowledge fades slowly.
-- A neutral **procedural** memory has `S = 112` days and, combined with the high importance such rules usually carry, is effectively permanent.
+- A neutral **procedural** memory has `S = 112` days and crosses the default deprecation threshold after about 212.5 days without reinforcement. Importance 8+ pins it; the tier alone does not.
 
 Promoting a memory up a tier (`engram promote`, or consolidation episodic → semantic) therefore lengthens its half-life as well as changing what it means.
 
@@ -88,7 +90,7 @@ t_deprecate = S · ln(1 / deprecateThreshold)
 
 ### A low-importance memory fading
 
-Take an importance-2, strength-0 memory — a minor observation you never reinforce.
+Take an episodic importance-2, strength-0 memory — a minor observation you never reinforce.
 
 ```
 importanceFactor(2) = 1 + 0.15·(2 − 5) = 0.55
@@ -108,7 +110,7 @@ It crosses the 0.15 deprecate threshold at `7.70 · ln(1/0.15) ≈ 14.6 days`. S
 
 ### Reinforcement extending stability
 
-Now a neutral importance-5 memory, and watch what reinforcement does to its stability and its time-to-deprecate.
+Now a neutral episodic importance-5 memory, and watch what reinforcement does to its stability and its time-to-deprecate.
 
 | strength | S (days) | days until deprecate (from fresh) |
 |---|---|---|
@@ -121,7 +123,7 @@ Each reinforcement adds `strengthWeight · baseStability · importanceFactor = 0
 
 ### A pinned memory
 
-An importance-8 memory has `importanceFactor(8) = 1.45` and `S = 20.3` days, so at 30 days its retention is about 0.228. But importance 8 meets `pinThreshold`, so it is pinned: the retention is reported, `daysUntilDeprecate` is `null`, and the decay pass will never deprecate it regardless of how low retention goes. Use importance 8+ for facts you want kept indefinitely without having to reinforce them on a schedule.
+An episodic importance-8 memory has `importanceFactor(8) = 1.45` and `S = 20.3` days, so at 30 days its retention is about 0.228. But importance 8 meets `pinThreshold`, so it is pinned: the retention is reported, `daysUntilDeprecate` is `null`, and the decay pass will never deprecate it regardless of how low retention goes. Use importance 8+ for facts you want kept indefinitely without having to reinforce them on a schedule.
 
 ## How decay enters retrieval
 
@@ -139,7 +141,7 @@ Decay handles "this got old." A separate mechanism handles "this got *replaced*.
 
 A memory may also carry an optional `valid_until` date. Past that date it is *expired*: still on disk, still part of the record, but excluded from recall the same way a superseded one is.
 
-Both together give a lightweight bi-temporal model: you can ask `recall --as-of <date>` (or pass `asOf` in the library / `as_of` in the MCP tool) to retrieve what was known and still valid at a past point in time, with memories superseded or expired after that date excluded. It is the queryable-history idea from temporal knowledge graphs, expressed as two optional frontmatter fields rather than a graph database.
+`recall --as-of <date>` (or `asOf` in the library / `as_of` in MCP) changes the clock used for retention and `valid_until` checks. It does **not** reconstruct the vault at that date: current status and text still apply, currently deprecated memories remain excluded by default, and creation dates are not used to exclude later memories. Use versioned vault snapshots for an actual historical view.
 
 ## Consolidation: episodic to semantic
 
@@ -158,9 +160,9 @@ The age and strength gates together mean consolidation only fires on episodic me
 
 ### Clustering
 
-Eligible memories are clustered by **Jaccard similarity** on their token sets. The token set for a memory is the lowercased alphanumeric tokens (length ≥ 3, minus a stopword list) from its title, summary, and body, capped at 80 tokens. Jaccard similarity between two sets is `|A ∩ B| / |A ∪ B|`.
+Eligible memories are clustered by **Jaccard similarity** on their token sets. The token set for a memory is the lowercased tokens (length ≥ 3, letters/digits with internal underscores or hyphens, minus a stopword list) from its title, summary, and body, capped at 80 unique tokens and stemmed when `search.stemming` is enabled. Jaccard similarity between two sets is `|A ∩ B| / |A ∪ B|`.
 
-Clustering is greedy and single-pass: for each memory, join the first existing cluster whose accumulated token set has Jaccard similarity `>= clusterThreshold` (default **0.18**), otherwise start a new cluster. The threshold is deliberately low — 0.18 means roughly one shared token in five — because episodic memories about the same topic phrase things differently, and the cost of a slightly loose cluster is one extra bullet in a summary, not a wrong fact.
+Clustering is greedy and single-pass: for each memory, join the first existing cluster whose accumulated token set has Jaccard similarity `>= clusterThreshold` (default **0.18**), otherwise start a new cluster. The threshold is deliberately low — 0.18 means roughly one shared token in five — because episodic memories about the same topic phrase things differently, and source observations are preserved as bullets. A cluster can still combine unrelated or incorrect observations; inspect the preview and resulting note.
 
 Only clusters of at least `minClusterSize` (default **3**) members are kept, and at most `maxPerRun` (default **3**) clusters are consolidated in a single pass, so one run never rewrites the whole vault.
 
@@ -175,6 +177,6 @@ For each kept cluster, the pass writes one new semantic memory:
 
 Each source is then marked `status: consolidated`. The sources are kept, not deleted — the episodic trail remains, and because a consolidated memory is no longer `active`, it is pinned and stops decaying.
 
-### Why semantic to procedural is human-gated
+### Why consolidation stops at semantic
 
-There is no automatic promotion from semantic to procedural. Procedural memories are operating rules — the things an agent treats as always-true constraints on its behavior. Promoting a statistical summary into a hard rule is exactly the kind of judgment that should not be made by a clustering heuristic. `engram promote <id>` is the only path, and it sets `confidence: high` on the way in, because a rule you commit to should be one you are sure of.
+There is no automatic promotion from semantic to procedural. Procedural memories are operating rules — the things an agent treats as always-true constraints on its behavior. Promoting a statistical summary into a hard rule is exactly the kind of judgment that should not be made by a clustering heuristic. `engram promote <id>` sets the tier to procedural and confidence to high. Direct writes can also choose that tier. Review procedures through your own workflow; Engram does not enforce a human approval step.

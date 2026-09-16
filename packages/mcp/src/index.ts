@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
   server.tool(
     "engram_recall",
-    "Search memory and return the most useful memories ranked by relevance blended with retention and reinforcement. Use when you want the raw hits rather than a packed context block. Pass as_of to ask what was known on a past date (memories superseded or expired after that date are excluded).",
+    "Search memory and return the most useful memories ranked by relevance blended with retention and reinforcement. Use when you want the raw hits rather than a packed context block. Pass as_of to evaluate retention and expiry at a supplied date. This uses current content and status; it does not reconstruct a historical snapshot.",
     {
       query: z.string(),
       limit: z.number().int().min(1).max(50).optional().describe("Max results (default 8)."),
@@ -93,10 +93,10 @@ async function main(): Promise<void> {
       content: z.string().describe("The memory body (markdown)."),
       tier: z.enum(TIERS).optional().describe("Default working."),
       type: z.string().optional().describe("note | fact | decision | error | reference | observation."),
-      importance: z.number().int().min(1).max(10).optional().describe("1-10; >=8 is pinned and never decays."),
+      importance: z.number().int().min(1).max(10).optional().describe("1-10; >=8 is exempt from automatic deprecation by default."),
       tags: z.array(z.string()).optional(),
       summary: z.string().optional().describe("One-line summary for retrieval snippets."),
-      scope: z.string().optional().describe("Namespace (agent/project/user) — for multi-agent isolation."),
+      scope: z.string().optional().describe("Namespace (agent/project/user) — for retrieval organization, not access control."),
       author: z.string().optional().describe("Who is writing this (provenance/audit)."),
       visibility: z.enum(["private", "shared", "global"]).optional(),
     },

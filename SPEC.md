@@ -10,20 +10,22 @@ engine adds three things a folder of notes cannot do on its own:
 
 1. **Tiered memory** — `working → episodic → semantic → procedural`, mirroring human memory.
 2. **Ebbinghaus decay** — memories lose retention on a forgetting curve unless referenced.
-   Recall reinforces them (spaced repetition); unreferenced, low-value memories fade and
-   are auto-deprecated.
+   Explicit reinforcement resets their decay clock (spaced repetition); unreinforced,
+   low-value memories become eligible for deprecation when a decay pass is applied.
 3. **Consolidation** — aged, reinforced episodic memories cluster by similarity and promote
    into durable semantic memories, the way sleep consolidates the day's experiences.
 
 Design rules:
 - **Markdown is the source of truth.** Everything else (index, vectors) is derived and
-  rebuildable from the `.md` files alone. Deleting `.engram/` must lose nothing but speed.
+  rebuildable from the `.md` files. Preserve `.engram/config.json` and operation logs;
+  these are durable state, not caches. Rebuilding vectors needs the configured provider.
 - **Zero native dependencies in `@engram/core`.** Pure TypeScript. No better-sqlite3, no
   native addons. The CLI must build and run on a clean machine with only Node ≥ 20.
 - **Config over hardcode.** No domain-specific enums baked in. Tiers are fixed (they are
   the cognitive model); types/tags/domains are user config.
-- **Privacy by default.** A scrub pass strips obvious secrets before write; nothing leaves
-  the machine unless the user wires an embedding provider.
+- **Local by default.** `addMemory` applies configured redaction patterns to body text.
+  Metadata, imports, and hand edits are outside that safety net. Runtime embedding calls
+  require an explicitly configured provider; see `SECURITY.md`.
 
 ---
 
@@ -46,6 +48,7 @@ engram/
   packages/
     core/    @engram/core  # engine: vault IO, index, decay, consolidation, retrieval, http api
     cli/     engram (bin)   # CLI over core
+    mcp/     @engram/mcp    # five-tool MCP server over stdio
     panel/   @engram/panel  # Vite+React control panel (black/grey/red), built to static dist
   examples/
     starter-vault/         # a runnable sample vault of .md memories
@@ -59,8 +62,9 @@ Dependency budget:
 - `@engram/core`: `gray-matter` (frontmatter), `yaml` (writes), `zod` (config/frontmatter
   validation). Nothing native. No web framework — the HTTP server uses `node:http`.
 - `engram` CLI: `@engram/core`, `commander`, `picocolors`, `cli-table3` (status dashboard).
+- `@engram/mcp`: `@engram/core`, `@modelcontextprotocol/sdk`, and `zod`.
 - `@engram/panel`: `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, `d3-force` (graph),
-  `recharts` or hand-rolled SVG for the decay chart. No CSS framework — hand-written CSS
+  hand-written SVG for the decay chart. No CSS framework — hand-written CSS
   with the theme tokens below.
 
 ---
@@ -73,7 +77,7 @@ A **memory** is one `.md` file inside a **vault**. The vault root holds tier dir
 my-vault/
   .engram/
     config.json
-    index.json          # derived BM25 index
+    index.json          # derived BM25F index
     vectors.json        # derived, only if an embedding provider is configured
     runs/               # decay/consolidation run logs (jsonl)
   working/
@@ -90,13 +94,13 @@ warns if a file's tier dir and frontmatter tier disagree.
 
 ```yaml
 ---
-id: 0c5f1e7a            # stable 8-char id, generated on add, never changes
+id: 0c5f1e7a2d90        # generated IDs are 12 hex characters; existing IDs are preserved
 title: "Short title"
 tier: working           # working | episodic | semantic | procedural
 type: note              # note | fact | decision | error | reference | observation (configurable list)
 status: active          # active | consolidated | deprecated | disputed
 confidence: medium      # high | medium | low
-importance: 5           # 1-10 integer; >= pinThreshold (default 8) never decays
+importance: 5           # 1-10 integer; >= pinThreshold (default 8) exempts from automatic deprecation
 strength: 0             # reinforcement count (>=0 integer)
 created: 2026-05-31      # ISO date
 last_reviewed: 2026-05-31
@@ -122,7 +126,7 @@ Continuous Ebbinghaus forgetting curve. For a memory `m` at evaluation time `now
 
 ```
 elapsedDays = max(0, daysBetween(m.last_reinforced ?? m.created, now))
-stability   = baseStability * (1 + strengthWeight * m.strength) * importanceFactor(m.importance)
+stability   = baseStability * (1 + strengthWeight * m.strength) * importanceFactor(m.importance) * tierFactor(m.tier)
 retention   = exp(-elapsedDays / stability)        // ∈ (0, 1], 1 = perfectly retained
 ```
 
@@ -130,25 +134,27 @@ retention   = exp(-elapsedDays / stability)        // ∈ (0, 1], 1 = perfectly 
   (importance 5 is neutral; higher slows decay, lower speeds it.)
 - `baseStability` default **14** (days), `strengthWeight` default **0.8**, `importanceWeight`
   default **0.15**. All in config under `decay`.
+- Tier stability multipliers default to working **0.4**, episodic **1**, semantic **2.5**,
+  and procedural **8**. The half-life is `stability * ln(2)`.
 
 **Pinning:** if `m.importance >= pinThreshold` (default **8**) OR `m.status !== 'active'`,
 retention is reported but the memory is exempt from auto-deprecation.
 
 **Decay pass** (`runDecay`):
-- Compute `retention` for every active memory.
+- Report `retention` for every memory; only eligible active memories can be deprecated.
 - A memory is **forgettable** if `active && importance < pinThreshold && retention < deprecateThreshold`
   (default **0.15**).
 - In `--apply` mode: set forgettable memories to `status: deprecated`, append a `decay`
   event to the run log, and rewrite the file. Dry-run (default) only reports.
 - Reinforcement is the inverse: `reinforce(ids)` increments `strength`, sets
   `last_reinforced = today`, appends a `reinforce` event. This resets `elapsedDays → 0` and
-  raises future stability — each recall makes a memory harder to forget (spaced repetition).
+  raises future stability — each reinforcement makes a memory harder to forget (spaced repetition).
 
 `retentionFor(memory, config, now)` is a pure function and must be unit-tested against the
 formula above. Expose `decayReport(vault)` returning per-memory `{ id, retention, forgettable,
 daysUntilDeprecate }` for the panel's "decaying soon" view.
 `daysUntilDeprecate` solves `retention = deprecateThreshold` for elapsedDays, minus current
-elapsed: `stability * ln(1/deprecateThreshold) - elapsedDays` (null if pinned).
+elapsed: `max(0, stability * ln(1/deprecateThreshold) - elapsedDays)` (null if pinned).
 
 ---
 
@@ -158,8 +164,8 @@ elapsed: `stability * ln(1/deprecateThreshold) - elapsedDays` (null if pinned).
 
 1. Gather **eligible** episodic memories: `tier === 'episodic' && status === 'active' &&
    strength >= minStrength (default 2) && ageDays(created) >= minAgeDays (default 14)`.
-2. Tokenize `title + summary + body` → lowercased alnum tokens length ≥ 3, minus a stopword
-   set, capped at 80 tokens per memory.
+2. Tokenize `title + summary + body` → lowercased tokens length ≥ 3 (letters/digits, with internal underscores or hyphens), minus a stopword
+   set, capped at 80 unique tokens per memory. Apply Porter stemming when `search.stemming` is enabled.
 3. Greedy cluster by **Jaccard similarity** ≥ `clusterThreshold` (default **0.18**): for each
    memory, join the first existing cluster whose token set passes the threshold, else start a
    new cluster.
@@ -167,34 +173,34 @@ elapsed: `stability * ln(1/deprecateThreshold) - elapsedDays` (null if pinned).
    clusters per run.
 5. For each kept cluster, synthesize one **semantic** memory:
    - `title`: `"Consolidated: <top 3 shared tokens>"`
-   - body: a `## Durable observations` bullet list of each source's summary (or first 180
-     body chars), plus a `## Sources` count.
+   - body: a `## Durable observations` bullet list of each source's summary (or first non-empty body line),
+     truncated to 180 characters, plus a `## Sources` count.
    - `links`: one `{ to: <source id>, rel: informed_by }` per source.
    - frontmatter: `tier: semantic, status: active, confidence: medium, importance: 6,
      strength: 0`.
-6. In `--apply`: write the semantic file, set each source's `status: consolidated`, rebuild
-   index, append a `consolidate` run-log event. Dry-run reports the planned clusters only.
+6. In `--apply`: write the semantic file, set each source's `status: consolidated`, and append a `consolidate` run-log event. Dry-run reports the planned clusters only.
 
-`semantic → procedural` is **human-invoked only** via `engram promote <id>` (no auto-promotion;
-procedural memories are operating rules and deserve a human in the loop).
+Consolidation stops at semantic. `engram promote <id>` explicitly changes a memory to
+procedural; direct CLI/library/MCP writes can also choose that tier. Human review is a
+recommended caller policy, not an enforced permission boundary.
 
 ---
 
 ## Search / retrieval
 
-Pure-TS inverted index + **BM25** (`k1=1.5`, `b=0.75`). Persisted to `.engram/index.json` as
-`{ version, builtAt, docs: [...], df: {...}, avgdl }`. Tokenizer shared with consolidation.
+Pure-TS inverted index + **BM25F** (`k1=1.5`, `b=0.75`). Persisted to `.engram/index.json` as
+`{ version, builtAt, count, fieldAvgdl, docs: {...}, df: {...} }`. Tokenizer shared with consolidation.
 
-- `buildIndex(vault)` / `reindex` — full rebuild from `.md` files.
+- `buildIndex(vault)` / `reindex` — full rebuild from `.md` files. Ordinary search reconciles its derived index.
 - `search(vault, query, { tier?, type?, status?, limit=10 })` → ranked `SearchHit[]` with
   `{ id, path, title, tier, score, snippet }`. Snippet = best-matching ~30-word window.
 - **Hybrid (optional):** if `config.embeddings.provider` is set, `buildVectors` populates
-  `.engram/vectors.json`; `search` fuses BM25 and cosine ranks via Reciprocal Rank Fusion
+  `.engram/vectors.json`; `semanticSearch` (CLI `search --hybrid`) fuses lexical and vector ranks via Reciprocal Rank Fusion
   (`k=60`). With no provider configured, search is lexical-only and fully offline. The
-  `EmbeddingProvider` interface: `embed(texts: string[]): Promise<number[][]>`. Ship an
-  `OpenAIEmbeddingProvider` stub gated behind an env key; default provider is `null`.
+  `EmbeddingProvider` interface: `embed(texts: string[]): Promise<number[][]>`. The OpenAI provider is gated behind configuration and an environment key;
+  default provider is `null`. Recall/context remain on the lexical path.
 
-`recall(vault, { query?, context?, limit })` is the agent-facing entry: blends search score
+`recall(vault, query, options)` is the agent-facing entry: blends search score
 with a recency+strength boost so a recall returns the *most useful* memories, not just the
 most lexically similar. Boost: `finalScore = bm25 * (0.6 + 0.4*retention) * (1 + 0.1*strength)`.
 
@@ -202,8 +208,8 @@ most lexically similar. Boost: `finalScore = bm25 * (0.6 + 0.4*retention) * (1 +
 
 ## HTTP API (served by core, consumed by panel)
 
-`createServer(vault, { staticDir? })` returns a `node:http` server. JSON API, no auth (binds
-to `127.0.0.1` only). Routes:
+`createServer(vault, { staticDir? })` returns a `node:http` server. JSON API, no auth. The CLI binds
+to `127.0.0.1`; library callers choose their own listening address. Routes:
 
 | Method | Route | Returns |
 |---|---|---|
@@ -212,6 +218,7 @@ to `127.0.0.1` only). Routes:
 | GET | `/api/memories/:id` | full `Memory` + `retention` + resolved `links` |
 | POST | `/api/memories/:id/reinforce` | updated memory |
 | GET | `/api/search?q=&tier=&limit=` | `SearchHit[]` |
+| GET | `/api/recall?q=&limit=` | `RecallHit[]` |
 | GET | `/api/graph` | `{ nodes: [{id,title,tier,strength,retention}], edges: [{from,to,rel}] }` |
 | GET | `/api/decay?` | `decayReport` rows |
 | POST | `/api/ops/decay` `{apply}` | run summary |
@@ -228,22 +235,28 @@ If `staticDir` is set, any non-`/api` GET serves the built panel (SPA fallback t
 
 ```
 engram init [dir]                 scaffold a vault (.engram/config.json, tier dirs, sample memory)
-engram add                        interactive add (prompts) — or:
 engram add -t <title> --tier <t> [--type --importance --tags] [--body -|<text>]
-engram search <query> [--tier --type --status --limit --json]
-engram recall <query> [--limit --json]      agent-facing blended retrieval
+engram search <query> [--tier --type --status --limit --hybrid --json]
+engram recall <query> [--limit --scope --as-of --reinforce --json]
+engram context <query> [--budget --tier --scope --body --json]
 engram reinforce <id...>          bump strength, reset decay clock
 engram decay [--apply]            forgetting pass (dry-run default)
 engram consolidate [--apply]      consolidation pass (dry-run default)
-engram promote <id>               episodic/semantic → procedural (human gate)
+engram promote <id>               set tier to procedural (explicit operation)
 engram status                     dashboard: counts by tier, decay health, recent activity
 engram reindex                    rebuild the search index
-engram doctor                     integrity: broken links, missing/!mismatched frontmatter, orphans
+engram doctor                     check integrity; errors set a non-zero exit code
+engram vectors [--model --rebuild] build optional embeddings (requires an API key)
+engram export [--out <file>]      export memories as JSON-Lines
+engram import <file>              import JSON-Lines; skip existing IDs
 engram panel [--port 4319]        launch the web control panel
 ```
 
-`status` is the CLI dashboard (cli-table3): a tier breakdown, count of memories decaying soon,
-last consolidation run, top 5 most-reinforced. Colors: red for warnings (decaying/forgotten),
+Most commands accept `--dir <vault>`; `init` takes a directory argument. The abbreviated
+option lists above omit values; use `<command> --help` for exact syntax.
+
+`status` is the CLI dashboard (cli-table3): tier and status breakdowns, average retention,
+count of memories decaying soon, and reinforced-memory summaries. Colors: red for warnings (decaying/forgotten),
 grey for chrome, default for values — mirrors the panel palette in the terminal.
 
 Exit non-zero on `doctor` failures so it is CI-usable.
@@ -261,8 +274,9 @@ Vite + React SPA. Talks only to the core HTTP API. Four views in a left rail:
    right drawer: full body, retention gauge, link list, **Reinforce** button.
 3. **Graph** — d3-force link graph. Nodes colored by tier, sized by strength, opacity by
    retention. Edges typed by `rel`. Click a node → focus + open its drawer.
-4. **Operations** — cards to run Decay / Consolidate / Reindex. Each shows a dry-run preview
-   first, then an **Apply** (red) confirm. Renders the run summary + appends to activity.
+4. **Operations** — cards to run Decay / Consolidate / Reindex. Decay and Consolidate show a dry-run
+   preview before an **Apply** (red) confirmation. Reindex runs directly. Applied operations
+   return a summary and refresh the activity feed.
 
 ### Theme tokens (use verbatim — this is the brand)
 
@@ -297,11 +311,12 @@ each memory row that depletes as the memory decays. This is the memorable detail
 - Decay pass deprecates exactly the forgettable set; pinned/high-importance survive.
 - Consolidation clusters a hand-built fixture into the expected semantic memory; sources
   flip to `consolidated`.
-- BM25 ranks an exact-title match above a body-only match; tier filter excludes other tiers.
+- BM25F ranks an exact-title match above a body-only match; tier filter excludes other tiers.
 - Frontmatter round-trips (parse → serialize → parse) without loss.
 - `doctor` flags an injected broken link and a tier/dir mismatch.
 
-CI: Node 20 + 22 matrix — `npm ci`, `npm run build`, `npm test`, `npm run lint`.
+CI: Linux Node 20/22/24 and Windows Node 22 — `npm ci`, build, lint, typecheck,
+unit tests, and entry-point smoke checks. The Linux Node 22 lane also audits dependencies.
 
 ---
 

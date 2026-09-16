@@ -20,13 +20,15 @@
     "build:lib": "npm run build --workspace @engram/core && npm run build --workspace engram && npm run build --workspace @engram/mcp",
     "test": "npm run test --workspace @engram/core",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "tsc -b packages/core packages/cli",
-    "clean": "rimraf packages/*/dist packages/*/tsconfig.tsbuildinfo"
+    "typecheck": "tsc -b packages/core packages/cli packages/mcp && npm run lint --workspace @engram/panel && npm run typecheck:smoke",
+    "clean": "rimraf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "typecheck:smoke": "tsc --allowJs --checkJs --noEmit --strict --noUncheckedIndexedAccess --noUnusedLocals --target ES2022 --module NodeNext --moduleResolution NodeNext --types node --skipLibCheck scripts/smoke.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.19.20",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
   }
 }

@@ -1,88 +1,69 @@
 # Multi-agent and cross-platform memory
 
-Engram is a single shared memory layer that many agents — and many agent
-*platforms* — can use at once. The frameworks (LangGraph, CrewAI, AutoGen) each
-ship their own memory store, and those stores don't talk to each other: a fact an
-AutoGen agent learns is invisible to a LangGraph orchestrator. Engram sits outside
-the frameworks, speaks MCP, and stores memory as plain files, so it fills that gap.
+Engram can store memories from cooperating agents in one markdown vault. The optional `scope`, `author`, and `visibility` fields provide provenance and a retrieval filter. They are metadata, not an identity or authorization system.
 
-## Namespacing — keep agents from contaminating each other
-
-Three optional frontmatter fields turn one vault into a multi-agent store:
+## Scope and visibility
 
 ```yaml
-scope: billing-agent     # the namespace (an agent, project, or user)
-author: claude-3         # who wrote it — provenance for audit
-visibility: private      # private | shared | global
+scope: billing-agent
+author: bot-7
+visibility: private
 ```
 
-Recall is scoped, with a sensible default: a memory is visible when recalling in
-namespace `S` if it is **unscoped** (legacy / shared knowledge), **in `S`**, or
-marked **`global`**. So agents see their own memory plus the shared/global tier,
-never each other's private notes.
+The filter in [scope.ts](../packages/core/src/scope.ts) behaves as follows:
 
-```bash
-engram add -t "Customer prefers email" --scope billing-agent --author bot-7 --visibility private -b "..."
-engram recall "how to reach the customer" --scope billing-agent
-```
+- With no requested scope, memories from every namespace are eligible.
+- With scope `S`, unscoped memories, memories in `S`, and memories marked `visibility: global` are eligible.
+- `private` and `shared` are stored values but do not create different cross-scope behavior.
 
-Over MCP, every tool takes a `scope` (and `engram_remember` takes `author` /
-`visibility`), so each connected agent passes its own namespace.
+Any process with access to the vault can read its markdown or make an unscoped request. Use separate vaults and operating-system permissions for mutually untrusted agents.
 
-## The shared blackboard
-
-Set `visibility: global` (or leave a memory unscoped) to put it on the shared
-tier every agent reads — the "blackboard" pattern for coordination and findings.
-Because each memory is its own file, concurrent agents writing *different*
-memories never conflict, and `author` records who contributed what.
-
-## Concurrency — deliberately simple
-
-One memory is one file; writes are atomic (temp-file + rename). Agents almost
-always write *different* memories, so file-grained last-writer-wins is correct and
-contamination-free. The derived index self-heals from the markdown by mtime, so it
-is never the source of truth and never the merge bottleneck.
-
-Engram deliberately does **not** use a CRDT. CRDTs solve real-time co-editing of
-*one* document; Engram's agents edit *different* memories, and adopting a CRDT
-would trade the plain-markdown, git-diffable format — the whole portability story —
-for an opaque binary blob. If you ever need true concurrent co-edit of a single
-memory, that belongs in an optional adapter, not the core.
-
-## Cross-platform: your memory is `git clone`-able
-
-This is what the database-locked memory services (Mem0, Letta, Zep) cannot offer:
-
-- **Git is your sync layer.** The vault is markdown; `git pull` / `git push`
-  synchronizes memory across machines and agents. Append-only, differently-named
-  memory files merge without conflict. Branch per agent and merge.
-- **Auditable by construction.** `git log` / `git blame` on a memory is a full,
-  human-readable history of who wrote what and when — a forensic trail an opaque
-  database doesn't give you. Combined with the `author` field, that is also the
-  cheapest defense against memory poisoning: every entry is attributed, and the
-  blast radius of a bad memory is contained to its scope.
-- **No lock-in.** `engram export` writes a portable JSON-Lines bundle (one memory
-  per line, all frontmatter + body); `engram import` reads it back, keyed on `id`
-  so it is idempotent. Move memory between vaults, or migrate in from another tool.
-
-```bash
-engram export -o memory.jsonl          # portable bundle
-engram import memory.jsonl             # idempotent; skips ids already present
-# the index is derived — regenerate after a git merge:
-engram reindex
-```
-
-Keep the derived index out of git (`.engram/index.json` and `.engram/vectors.json`
-are gitignored) and rebuild it on the other side — git carries the markdown, Engram
-rebuilds the index.
-
-## Summary
-
-| Capability | How |
+| Surface | Scope behavior |
 |---|---|
-| Per-agent isolation | `scope` + scoped recall (default-isolate, global fallback) |
-| Shared coordination | `visibility: global` blackboard tier |
-| Provenance / audit | `author` field + git history |
-| Concurrency | one-file-per-memory, atomic writes, self-healing index |
-| Sync across machines/agents | git (markdown merges; index rebuilt) |
-| Portability / no lock-in | `engram export` / `engram import` (JSON-Lines) |
+| Core `recall` and `packContext` | Optional scope filter |
+| CLI `recall` and `context` | Optional `--scope` |
+| MCP `engram_context` and `engram_recall` | Optional `scope` |
+| CLI `add` and MCP `engram_remember` | Write scope, author, and visibility metadata |
+| CLI `search`, HTTP API, and panel | No scope filter |
+| Reinforcement and statistics | Reinforce by ID or report the whole vault; no scope argument |
+
+From the built repository root:
+
+```bash
+node packages/cli/dist/index.js add --dir ../agent-memory --title "Customer prefers email" --tier episodic --scope billing-agent --author bot-7 --visibility private --body "Confirmed on the call."
+node packages/cli/dist/index.js recall "customer email" --dir ../agent-memory --scope billing-agent
+```
+
+Use `visibility: global` when a memory should appear in scoped recall for every namespace. An unscoped memory is also visible to all scopes for backward compatibility.
+
+CLI, library, and MCP writes accept all four tiers. `engram promote <id>` sets the selected memory to procedural without checking the caller's identity or source tier. Human review of procedures belongs in the caller's workflow.
+
+## Files and concurrency
+
+Each memory is a markdown file. Writes use a temporary sibling file followed by rename. This protects an individual file write, but Engram provides neither cross-process locking nor multi-file transactions. Concurrent edits or reinforcement of the same memory can overwrite each other. Coordinate shared writers, consolidation, and decay.
+
+The panel refreshes its in-process store before API requests. A new CLI invocation reads from disk. Long-running clients should not assume a transactionally consistent view of other writers.
+
+The lexical index and optional vectors are derived. Preserve `.engram/config.json` and any operation history you need. The repository ignores these paths:
+
+```text
+.engram/index.json
+.engram/vectors.json
+.engram/runs/
+```
+
+The run log is local history, not a synchronized or tamper-proof audit trail. A new vault outside this repository needs its own Git ignore rules; repository ignore rules do not follow an exported vault.
+
+## Git and portability
+
+Git can synchronize markdown and configuration across machines. This is a workflow around Engram, not a built-in sync service. Review and resolve conflicts before rebuilding the index. Different memory files often merge cleanly; edits to the same file still need conflict resolution.
+
+```bash
+node packages/cli/dist/index.js export --dir ../agent-memory --out memory.jsonl
+node packages/cli/dist/index.js import memory.jsonl --dir ../other-vault
+node packages/cli/dist/index.js reindex --dir ../other-vault
+```
+
+Initialize the destination vault before importing. Export writes one JSON object per memory containing frontmatter and body; it does not include vault configuration or operation logs. Import preserves IDs and skips IDs already present. Repeating an import is idempotent; it does not merge newer versions of existing memories.
+
+There is no CRDT, background sync process, or same-file merge protocol. Git history records committed changes; the `author` field is caller-supplied provenance.
