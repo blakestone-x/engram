@@ -4,6 +4,15 @@ All notable changes to Engram are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Reworked the README around a runnable starter vault, MCP setup, and reproducible verification commands.
+- Aligned contributor and architecture documentation with all four workspaces.
+- Corrected storage, scope, temporal-retrieval, token-budget, and procedural-promotion claims to match the implementation. Configuration and operation history are explicitly preserved.
+- Added an isolated smoke check for the built CLI, example vault, MCP tools, and panel HTTP path, plus broader CI coverage and complete workspace type checks.
+
 ## [0.3.0] - 2026-06-01
 
 A multi-agent + cross-platform release, plus a real hybrid-search bug fix. Engram
@@ -21,10 +30,9 @@ becomes a memory layer many agents and platforms can share. See
 ### Added
 
 - **Namespaces / scopes** — optional `scope`, `author`, and `visibility`
-  (`private` | `shared` | `global`) frontmatter. Recall is scoped (default-isolate
-  with a global/unscoped fallback), so concurrent agents don't contaminate each
-  other. Threaded through the CLI (`add --scope/--author/--visibility`,
-  `recall --scope`) and every MCP tool.
+  (`private` | `shared` | `global`) frontmatter. Recall can be filtered by scope, with a global/unscoped fallback; omitting
+  scope sees all memories. Threaded through CLI add/recall/context and MCP
+  remember/recall/context. This is retrieval organization, not access control.
 - **Reinforce-on-recall** — opt-in (`recall --reinforce`, or `reinforce: true` in
   the library): each recall the agent acts on reinforces the top results, closing
   the spaced-repetition loop the decay model assumes.

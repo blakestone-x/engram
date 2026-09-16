@@ -4,10 +4,11 @@ This is the contributor's map of Engram: what each module does, how data moves t
 
 ## Packages
 
-Three packages in an npm workspace (`packages/*`):
+Four packages in an npm workspace (`packages/*`):
 
 - **`@engram/core`** — the engine. All vault IO, the search index, decay, consolidation, recall, the optional embedding layer, and the HTTP API. Pure TypeScript, ESM, no native dependencies. Depends only on `gray-matter`, `yaml`, and `zod`.
 - **`engram`** (`packages/cli`) — the command-line interface. A thin wrapper over `@engram/core` using `commander`, `picocolors`, and `cli-table3`. It holds no engine logic; every command resolves a vault and calls into core.
+- **`@engram/mcp`** — the stdio MCP server. Five tools expose context, recall, memory writes, reinforcement, and vault statistics through the MCP SDK with Zod tool schemas.
 - **`@engram/panel`** — the Vite + React control panel. A static SPA that talks to the core HTTP API and nothing else. Built to a `dist/` that core can serve.
 
 ## The `@engram/core` module map
@@ -31,6 +32,9 @@ One line each, in roughly dependency order. The barrel is `src/index.ts`.
 | `recall.ts` | The agent-facing retrieval entry: BM25 blended with retention and reinforcement so recall returns the most useful memories rather than the most lexically similar. |
 | `context.ts` | `packContext` — token-budgeted retrieval that formats a compact markdown block of the top memories for prompt injection; `estimateTokens`. |
 | `embeddings.ts` | The optional semantic layer: an `EmbeddingProvider` interface, an OpenAI provider gated on `OPENAI_API_KEY`, vector build, cosine, and Reciprocal Rank Fusion of lexical and semantic ranks. No-op without a configured provider. |
+| `scope.ts` | Optional namespace filtering for recall/context; unscoped queries see every scope. This is not an authorization layer. |
+| `export.ts` | JSON-Lines memory export and import, with existing IDs skipped on import. Configuration and run logs are not included. |
+| `env.ts` | CLI loading of local environment files for opt-in embedding configuration. |
 | `stats.ts` | `vaultStats` — counts by tier and status, average retention, the decaying-soon count, and recently-reinforced memories. Feeds the CLI `status` and the panel overview. |
 | `graph.ts` | `buildGraph` — nodes (id, title, tier, strength, retention) and typed edges from frontmatter `links`, for the panel's force-directed view. |
 | `doctor.ts` | Integrity checks: duplicate ids, missing title/summary, tier-directory mismatch, unknown type, broken links, out-of-range importance. Errors fail; warnings do not. |
@@ -38,16 +42,16 @@ One line each, in roughly dependency order. The barrel is `src/index.ts`.
 
 ## Data flow
 
-The markdown files are the source of truth; everything else is derived in memory or in `.engram/`.
+The markdown files are the source of truth for memory content. Search indexes and vectors are derived; configuration and operation history are separate durable state.
 
 ```
 my-vault/
   working/ episodic/ semantic/ procedural/   ← .md files (canonical)
   .engram/
-    config.json     ← user config, merged over DEFAULT_CONFIG
+    config.json     ← user config, merged over DEFAULT_CONFIG; preserve
     index.json      ← derived BM25 index (rebuildable)
     vectors.json    ← derived, only if an embedding provider is set
-    runs/runs.jsonl ← append-only run log
+    runs/runs.jsonl ← append-only run log; preserve if needed
 ```
 
 A read flows like this:
@@ -59,9 +63,9 @@ A read flows like this:
   → Memory[]                    in-memory array of { frontmatter, body, path, absPath }
 ```
 
-From that `Memory[]`, the engine derives whatever a caller needs without writing anything: `decayReport` computes retention per memory, `vaultStats` aggregates, `buildGraph` walks links, `recall` blends scores. The one persisted derivation is the search index — `buildIndex` tokenizes every memory's title, summary, and body and writes `index.json`; `search` loads it (rebuilding if missing or a stale version).
+From that `Memory[]`, the engine computes read models: `decayReport` computes retention per memory, `vaultStats` aggregates, `buildGraph` walks links, `recall` blends scores. The default persisted derivation is the search index — `buildIndex` tokenizes every memory's title, summary, and body and writes `index.json`; `search` loads it (rebuilding if missing or a stale version).
 
-A write flows the other way. `addMemory` builds frontmatter from input, runs the body through the privacy scrub, picks a path (`<tier>/<date>-<slug>-<id>.md`), and serializes with the canonical key order. `reinforce`, `runDecay --apply`, and `runConsolidation --apply` all mutate frontmatter and rewrite files, then append an event to the run log. After any write that changes the corpus, the index is rebuilt.
+A write flows the other way. `addMemory` builds frontmatter from input, runs the body through the privacy scrub, picks a path (`<tier>/<date>-<slug>-<id>.md`), and serializes with the canonical key order. `reinforce`, `runDecay --apply`, and `runConsolidation --apply` mutate frontmatter and rewrite files, then append events to the run log when changes are applied. Index reconciliation happens on search or explicit reindexing. Individual writes use temporary files and rename; a multi-file operation is not transactional.
 
 There is no in-process state between commands. Each CLI invocation re-reads the vault from disk, which keeps the model simple and means a hand-edit to a `.md` file is picked up on the next command with no cache to invalidate.
 
@@ -72,3 +76,11 @@ There is no in-process state between commands. Each CLI invocation re-reads the 
 ## How the panel sits on top
 
 `engram panel` calls `createServer(vault, { staticDir })` from core and binds it to `127.0.0.1`. The server exposes the engine as JSON (`/api/stats`, `/api/memories`, `/api/search`, `/api/recall`, `/api/graph`, `/api/decay`, `/api/runs`, and the `/api/ops/*` mutation routes) and, when a `staticDir` is set, serves the built panel SPA for any non-`/api` GET with an index.html fallback. The panel is a pure client of that API — it has no direct filesystem access and no engine logic of its own. In development, Vite serves the React app and proxies `/api` to a separately running core server on loopback:4319.
+
+## Long-running clients and boundaries
+
+The store caches parsed memories within a process. The panel refreshes the store before API requests; a new CLI process starts from disk. MCP reads should not be treated as a transactional view across concurrent writers. Coordinate shared maintenance and updates to the same memory.
+
+CLI/MCP recall and context use lexical retrieval with retention weighting. Optional vector fusion is a separate `semanticSearch` path, exposed by `engram search --hybrid`. Scope filtering applies to recall/context when supplied, not to every read or write surface. See [MULTI-AGENT.md](MULTI-AGENT.md).
+
+The CLI chooses the loopback bind address. The core `createServer` function returns an HTTP server; embedding applications are responsible for how they listen and secure it.

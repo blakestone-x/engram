@@ -5,9 +5,10 @@ dist/
 *.log
 coverage/
 
-# Engram vault derived artifacts (rebuildable from .md sources), at any depth
+# Engram vault derived artifacts, at any depth
 **/.engram/index.json
 **/.engram/vectors.json
+# Local operation history: not derivable; back up separately if needed
 **/.engram/runs/
 *.engram-*.tmp
 

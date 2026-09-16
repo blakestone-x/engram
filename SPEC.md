@@ -10,14 +10,15 @@ engine adds three things a folder of notes cannot do on its own:
 
 1. **Tiered memory** — `working → episodic → semantic → procedural`, mirroring human memory.
 2. **Ebbinghaus decay** — memories lose retention on a forgetting curve unless referenced.
-   Recall reinforces them (spaced repetition); unreferenced, low-value memories fade and
-   are auto-deprecated.
+   Explicit reinforcement resets their decay clock (spaced repetition); unreinforced,
+   low-value memories become eligible for deprecation when a decay pass is applied.
 3. **Consolidation** — aged, reinforced episodic memories cluster by similarity and promote
    into durable semantic memories, the way sleep consolidates the day's experiences.
 
 Design rules:
 - **Markdown is the source of truth.** Everything else (index, vectors) is derived and
-  rebuildable from the `.md` files alone. Deleting `.engram/` must lose nothing but speed.
+  rebuildable from the `.md` files. Preserve `.engram/config.json` and operation logs;
+  these are durable state, not caches. Rebuilding vectors needs the configured provider.
 - **Zero native dependencies in `@engram/core`.** Pure TypeScript. No better-sqlite3, no
   native addons. The CLI must build and run on a clean machine with only Node ≥ 20.
 - **Config over hardcode.** No domain-specific enums baked in. Tiers are fixed (they are
@@ -46,6 +47,7 @@ engram/
   packages/
     core/    @engram/core  # engine: vault IO, index, decay, consolidation, retrieval, http api
     cli/     engram (bin)   # CLI over core
+    mcp/     @engram/mcp    # five-tool MCP server over stdio
     panel/   @engram/panel  # Vite+React control panel (black/grey/red), built to static dist
   examples/
     starter-vault/         # a runnable sample vault of .md memories
@@ -59,6 +61,7 @@ Dependency budget:
 - `@engram/core`: `gray-matter` (frontmatter), `yaml` (writes), `zod` (config/frontmatter
   validation). Nothing native. No web framework — the HTTP server uses `node:http`.
 - `engram` CLI: `@engram/core`, `commander`, `picocolors`, `cli-table3` (status dashboard).
+- `@engram/mcp`: `@engram/core`, `@modelcontextprotocol/sdk`, and `zod`.
 - `@engram/panel`: `react`, `react-dom`, `vite`, `@vitejs/plugin-react`, `d3-force` (graph),
   `recharts` or hand-rolled SVG for the decay chart. No CSS framework — hand-written CSS
   with the theme tokens below.
@@ -122,7 +125,7 @@ Continuous Ebbinghaus forgetting curve. For a memory `m` at evaluation time `now
 
 ```
 elapsedDays = max(0, daysBetween(m.last_reinforced ?? m.created, now))
-stability   = baseStability * (1 + strengthWeight * m.strength) * importanceFactor(m.importance)
+stability   = baseStability * (1 + strengthWeight * m.strength) * importanceFactor(m.importance) * tierFactor(m.tier)
 retention   = exp(-elapsedDays / stability)        // ∈ (0, 1], 1 = perfectly retained
 ```
 
@@ -130,6 +133,8 @@ retention   = exp(-elapsedDays / stability)        // ∈ (0, 1], 1 = perfectly 
   (importance 5 is neutral; higher slows decay, lower speeds it.)
 - `baseStability` default **14** (days), `strengthWeight` default **0.8**, `importanceWeight`
   default **0.15**. All in config under `decay`.
+- Tier stability multipliers default to working **0.4**, episodic **1**, semantic **2.5**,
+  and procedural **8**. The half-life is `stability * ln(2)`.
 
 **Pinning:** if `m.importance >= pinThreshold` (default **8**) OR `m.status !== 'active'`,
 retention is reported but the memory is exempt from auto-deprecation.
@@ -142,13 +147,13 @@ retention is reported but the memory is exempt from auto-deprecation.
   event to the run log, and rewrite the file. Dry-run (default) only reports.
 - Reinforcement is the inverse: `reinforce(ids)` increments `strength`, sets
   `last_reinforced = today`, appends a `reinforce` event. This resets `elapsedDays → 0` and
-  raises future stability — each recall makes a memory harder to forget (spaced repetition).
+  raises future stability — each reinforcement makes a memory harder to forget (spaced repetition).
 
 `retentionFor(memory, config, now)` is a pure function and must be unit-tested against the
 formula above. Expose `decayReport(vault)` returning per-memory `{ id, retention, forgettable,
 daysUntilDeprecate }` for the panel's "decaying soon" view.
 `daysUntilDeprecate` solves `retention = deprecateThreshold` for elapsedDays, minus current
-elapsed: `stability * ln(1/deprecateThreshold) - elapsedDays` (null if pinned).
+elapsed: `max(0, stability * ln(1/deprecateThreshold) - elapsedDays)` (null if pinned).
 
 ---
 
@@ -172,11 +177,11 @@ elapsed: `stability * ln(1/deprecateThreshold) - elapsedDays` (null if pinned).
    - `links`: one `{ to: <source id>, rel: informed_by }` per source.
    - frontmatter: `tier: semantic, status: active, confidence: medium, importance: 6,
      strength: 0`.
-6. In `--apply`: write the semantic file, set each source's `status: consolidated`, rebuild
-   index, append a `consolidate` run-log event. Dry-run reports the planned clusters only.
+6. In `--apply`: write the semantic file, set each source's `status: consolidated`, and append a `consolidate` run-log event. Dry-run reports the planned clusters only.
 
-`semantic → procedural` is **human-invoked only** via `engram promote <id>` (no auto-promotion;
-procedural memories are operating rules and deserve a human in the loop).
+Consolidation stops at semantic. `engram promote <id>` explicitly changes a memory to
+procedural; direct CLI/library/MCP writes can also choose that tier. Human review is a
+recommended caller policy, not an enforced permission boundary.
 
 ---
 
@@ -194,7 +199,7 @@ Pure-TS inverted index + **BM25** (`k1=1.5`, `b=0.75`). Persisted to `.engram/in
   `EmbeddingProvider` interface: `embed(texts: string[]): Promise<number[][]>`. Ship an
   `OpenAIEmbeddingProvider` stub gated behind an env key; default provider is `null`.
 
-`recall(vault, { query?, context?, limit })` is the agent-facing entry: blends search score
+`recall(vault, query, options)` is the agent-facing entry: blends search score
 with a recency+strength boost so a recall returns the *most useful* memories, not just the
 most lexically similar. Boost: `finalScore = bm25 * (0.6 + 0.4*retention) * (1 + 0.1*strength)`.
 
@@ -235,7 +240,7 @@ engram recall <query> [--limit --json]      agent-facing blended retrieval
 engram reinforce <id...>          bump strength, reset decay clock
 engram decay [--apply]            forgetting pass (dry-run default)
 engram consolidate [--apply]      consolidation pass (dry-run default)
-engram promote <id>               episodic/semantic → procedural (human gate)
+engram promote <id>               set tier to procedural (explicit operation)
 engram status                     dashboard: counts by tier, decay health, recent activity
 engram reindex                    rebuild the search index
 engram doctor                     integrity: broken links, missing/!mismatched frontmatter, orphans

@@ -6,7 +6,7 @@ self-decaying long-term memory backed by an [Engram](../../README.md) vault.
 
 The memory is plain markdown on disk. There is no vector database to run and no
 service to host. An agent that calls `engram_context` before it acts and
-`engram_remember` after it learns something gets durably better across sessions:
+`engram_remember` after it learns something can reuse that knowledge across sessions:
 what it keeps using stays sharp, what it stops using fades.
 
 ## Tools
@@ -26,14 +26,14 @@ The package isn't published to npm yet, so build it from a clone of the monorepo
 ```bash
 git clone https://github.com/blakestone-x/engram
 cd engram
-npm install
+npm ci
 npm run build:lib
 ```
 
 Then create a vault for the agent's memory:
 
 ```bash
-node packages/cli/dist/index.js init ~/agent-memory
+node packages/cli/dist/index.js init ../agent-memory
 ```
 
 The server resolves its vault from, in order: a `--vault <dir>` flag, the
@@ -59,16 +59,14 @@ at the built server inside your clone:
 }
 ```
 
-If you'd rather have a command on your PATH, run `npm i -g ./packages/mcp` from
-the repo root. npm links the install back to the clone (keep the clone in
-place), and the config becomes `"command": "engram-mcp"` with
-`"args": ["--vault", "/absolute/path/to/agent-memory"]`.
+Keep the clone and built output in place: the configuration runs that local server directly.
 
 ### Cursor
 
-Add an MCP server with command `node`, the same two args as above, and your
-vault path. Or set `ENGRAM_VAULT` in the server's environment instead of
+Add an MCP server with command `node`, the server script path, `--vault`, and the vault path as the three arguments above. Or set `ENGRAM_VAULT` in the server's environment instead of
 passing `--vault`.
+
+Use absolute paths in client configuration. On Windows, JSON paths can use forward slashes (for example, `C:/dev/engram/packages/mcp/dist/index.js`).
 
 ## A suggested agent contract
 
@@ -83,14 +81,23 @@ That loop is the whole idea. Retrieval stays lightweight (a bounded context
 block, not the whole store), the vault grows as the agent works, and the
 forgetting curve keeps it from drowning in stale notes.
 
+## Scope and trust
+
+`engram_context` and `engram_recall` accept a `scope` filter; `engram_remember` can store one. `engram_stats` is vault-wide and `engram_reinforce` addresses a memory by ID without a scope check. An omitted query scope sees all namespaces. Use these tools with trusted agents; scopes are not access controls.
+
+Context budgets are approximate character-based estimates; the first result may exceed the requested budget. The `as_of` option evaluates retention and expiry at a supplied date but does not reconstruct past memory contents or status. See [the memory model](../../docs/MEMORY-MODEL.md).
+
 ## Maintenance
 
 Run the decay and consolidation passes on a schedule (cron, a CI job, or by
-hand) with the Engram CLI (`npm i -g ./packages/cli` from the repo root):
+hand) with the built Engram CLI from the repository root:
 
 ```bash
-engram decay --apply        # deprecate memories that fell below retention threshold
-engram consolidate --apply  # promote clustered episodic memories into semantic ones
+node packages/cli/dist/index.js consolidate --dir ../agent-memory
+node packages/cli/dist/index.js decay --dir ../agent-memory
+# After reviewing the previews:
+node packages/cli/dist/index.js consolidate --apply --dir ../agent-memory
+node packages/cli/dist/index.js decay --apply --dir ../agent-memory
 ```
 
 MIT licensed. Part of the [Engram](../../README.md) project.
