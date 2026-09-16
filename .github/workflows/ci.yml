@@ -52,13 +52,17 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
+      - name: Materialize the existing workspace dependency graph
+        run: npm ci --ignore-scripts
       - name: Resolve supported dependency updates without lifecycle scripts
         run: |
           npm pkg set 'devDependencies.vitest=^4.1.11'
           npm pkg set 'devDependencies.vitest=^4.1.11' --workspace @engram/core
+          npm install --package-lock-only --ignore-scripts
           npm update --package-lock-only --ignore-scripts
       - name: Report candidate lockfile and manifests
+        if: always()
         run: |
           node -e "const fs=require('node:fs'); for(const p of ['package-lock.json','package.json','packages/core/package.json']) console.log('ENGRAM_CANDIDATE='+JSON.stringify({path:p,content:fs.readFileSync(p,'utf8')}))"
       - name: Audit candidate
