@@ -160,7 +160,7 @@ The age and strength gates together mean consolidation only fires on episodic me
 
 ### Clustering
 
-Eligible memories are clustered by **Jaccard similarity** on their token sets. The token set for a memory is the lowercased alphanumeric tokens (length ≥ 3, minus a stopword list) from its title, summary, and body, capped at 80 tokens. Jaccard similarity between two sets is `|A ∩ B| / |A ∪ B|`.
+Eligible memories are clustered by **Jaccard similarity** on their token sets. The token set for a memory is the lowercased tokens (length ≥ 3, letters/digits with internal underscores or hyphens, minus a stopword list) from its title, summary, and body, capped at 80 unique tokens and stemmed when `search.stemming` is enabled. Jaccard similarity between two sets is `|A ∩ B| / |A ∪ B|`.
 
 Clustering is greedy and single-pass: for each memory, join the first existing cluster whose accumulated token set has Jaccard similarity `>= clusterThreshold` (default **0.18**), otherwise start a new cluster. The threshold is deliberately low — 0.18 means roughly one shared token in five — because episodic memories about the same topic phrase things differently, and source observations are preserved as bullets. A cluster can still combine unrelated or incorrect observations; inspect the preview and resulting note.
 

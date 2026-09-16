@@ -15,19 +15,19 @@ So the source of truth became plain `.md` files with YAML frontmatter. The prope
 - **Greppable.** Finding every memory that mentions a thing is `grep`, not a query language.
 - **Portable.** The whole memory is a folder. Copy it, sync it however you already sync files, hand it to another tool. There is no server to stand up to read it.
 
-The cost is that you need an index for fast search, and you need to keep it in sync with the files. Engram resolves that by treating the index as derived: the BM25 index in `.engram/index.json` is rebuildable from the markdown with `engram reindex`, while `.engram/config.json` and operation logs must be preserved separately. The markdown is canonical memory content; the entire `.engram/` directory is not a cache.
+The cost is that you need an index for fast search, and you need to keep it in sync with the files. Engram resolves that by treating the index as derived: the BM25F index in `.engram/index.json` is rebuildable from the markdown with `engram reindex`, while `.engram/config.json` and operation logs must be preserved separately. The markdown is canonical memory content; the entire `.engram/` directory is not a cache.
 
 ## Why a forgetting curve, not unbounded storage
 
 The other early lesson was that a memory store that never forgets gets worse, not better, as it fills. Every observation an agent ever made stays at full weight, so a fact from months ago competes for retrieval against one from this morning, and the signal-to-noise ratio of recall drops as the store grows. The agent's memory becomes a hoard.
 
-Forgetting is the fix, but it has to be principled, not a fixed time-to-live. The Ebbinghaus forgetting curve gives a memory a half-life that depends on how important it is and how often it has been recalled. A memory you keep using resets its own clock and decays more slowly each time — spaced repetition. A memory nothing references falls below a threshold and gets deprecated. The active retrieval set can shrink as neglected memories are deprecated. Disk usage still grows because those files are retained; retrieval-quality gains need evaluation against the workload.
+Forgetting is the fix, but it has to be principled, not a fixed time-to-live. The Ebbinghaus forgetting curve gives a memory a half-life that depends on how important it is and how often it has been reinforced. Explicit reinforcement resets the clock and slows future decay; recall can opt into reinforcement. A neglected, unpinned active memory can fall below the threshold and be deprecated when a decay pass is applied. The active retrieval set can shrink as neglected memories are deprecated. Disk usage still grows because those files are retained; retrieval-quality gains need evaluation against the workload.
 
 The deprecate-don't-delete choice matters here. A forgotten memory is marked `deprecated`, not removed, so the trail is intact and a mistake is recoverable. Forgetting in Engram means "stop surfacing this," not "destroy it."
 
 ## Why tiers
 
-A flat store treats a scratch note and an operating rule identically, which is wrong in both directions: the scratch note lingers too long and the rule is too easy to lose. Tiers separate by durability. Working memory is meant to churn. Episodic memory is the raw record, expected to decay unless something about it recurs. Semantic memory is the distilled, stable knowledge. Procedural memory is the rules, which a human commits to deliberately.
+A flat store treats a scratch note and an operating rule identically, which is wrong in both directions: the scratch note lingers too long and the rule is too easy to lose. Tiers separate by durability. Working memory is meant to churn. Episodic memory is the raw record, expected to decay unless something about it recurs. Semantic memory is the distilled, stable knowledge. Procedural memory is for deliberately maintained rules; review belongs in the caller's workflow.
 
 The tiers are also what makes consolidation meaningful. Without a distinction between "the day's episodes" and "durable knowledge," there is nothing for consolidation to promote *into*. With it, the offline pass has a clear job: take the episodic memories that have aged and been reinforced, find the ones that are about the same thing, and write a semantic memory that captures the pattern — with links back to the episodes it came from.
 
@@ -36,7 +36,7 @@ The tiers are also what makes consolidation meaningful. Without a distinction be
 The public engine is deliberately smaller than the private system it came from. Cut for the first release:
 
 - **Multi-user and sync.** Engram is single-user and local. The private system has more machinery around shared and synchronized memory; none of it is here, and the current design is one trusted user pointing tools at a folder. Optional scopes help cooperating agents organize retrieval, but do not enforce access control.
-- **Automatic promotion to procedural.** The clustering heuristic stops at semantic. Turning a summary into an operating rule is a human decision, made through `engram promote`.
+- **Automatic promotion to procedural.** The clustering heuristic stops at semantic. `engram promote` is an explicit operation. Direct procedural writes are also available; the tool does not enforce human approval.
 - **Domain types and schemas.** The private system bakes in types and structure tied to its work. The public config ships a generic list of types and lets you define your own; no domain enums are hardcoded.
 - **A hosted anything.** No service, no telemetry, no network calls unless you wire an embedding provider yourself. The default path touches the network zero times.
 

@@ -113,7 +113,7 @@ function DecayCard({ onApplied }: { onApplied?: () => void }) {
             <Metric n={result.deprecated} k="deprecated" red={result.deprecated > 0} />
           </div>
           <span className="mono muted" style={{ fontSize: 11 }}>
-            applied · clock reset for survivors
+            applied · eligible memories deprecated
           </span>
         </div>
       )}
