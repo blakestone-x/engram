@@ -66,7 +66,7 @@ Keep the clone and built output in place: the configuration runs that local serv
 Add an MCP server with command `node`, the server script path, `--vault`, and the vault path as the three arguments above. Or set `ENGRAM_VAULT` in the server's environment instead of
 passing `--vault`.
 
-Use absolute paths in client configuration. On Windows, JSON paths can use forward slashes (for example, `C:/dev/engram/packages/mcp/dist/index.js`).
+Use absolute paths in client configuration. On Windows, JSON paths can use forward slashes (for example, `C:/path/to/engram/packages/mcp/dist/index.js`).
 
 ## A suggested agent contract
 

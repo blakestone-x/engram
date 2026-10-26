@@ -85,7 +85,7 @@ After building and creating a vault, point your MCP client's configuration at th
 }
 ```
 
-Use absolute paths. On Windows, forward slashes work in JSON paths, for example `C:/dev/engram/packages/mcp/dist/index.js`. The server resolves the vault from `--vault`, then `ENGRAM_VAULT`, then the nearest vault above its working directory. Protocol messages use stdout; diagnostics use stderr.
+Use absolute paths. On Windows, forward slashes work in JSON paths, for example `C:/path/to/engram/packages/mcp/dist/index.js`. The server resolves the vault from `--vault`, then `ENGRAM_VAULT`, then the nearest vault above its working directory. Protocol messages use stdout; diagnostics use stderr.
 
 A useful agent instruction:
 
